@@ -112,7 +112,8 @@ jobs:
         echo "=== Trivy Filesystem ==="
         trivy fs --format json --output ../trivy-fs-results.json . || echo "Trivy fs completed with warnings"
         trivy fs --scanners secret --format json --output ../trivy-secrets-results.json . || echo "Trivy secrets completed with warnings"
-        trivy fs --scanners config --format json --output ../trivy-config-results.json . || echo "Trivy config completed with warnings"
+        trivy fs --scanners misconfig --format json --output ../trivy-config-results.json . || echo "Trivy misconfig completed with warnings"
+
 
     - name: 📊 Trivy - Remote Repo Scan (Fallback)
       id: trivy_repo
