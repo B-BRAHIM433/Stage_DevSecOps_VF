@@ -163,19 +163,12 @@ jobs:
         env:
             SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         run: |
-         if [ -n "$SNYK_TOKEN" ]; then
-           echo "🔑 Authenticating with Snyk..."
-           echo "$SNYK_TOKEN" | snyk auth --auth-type=token
-           if [ $? -eq 0 ]; then
-             echo "✅ Snyk authenticated successfully"
-           else
-             echo "⚠️ Snyk authentication failed, continuing without Snyk"     
-             echo "SKIP_SNYK=true" >> $GITHUB_ENV
-           fi
-         else
-           echo "⚠️ SNYK_TOKEN not found, skipping Snyk authentication"
-           echo "SKIP_SNYK=true" >> $GITHUB_ENV
-         fi  
+          if [ -n "$SNYK_TOKEN" ]; then
+            snyk auth "$SNYK_TOKEN"
+            echo "✅ Snyk authenticated"
+          else
+            echo "⚠️ SNYK_TOKEN not provided - some scans will be limited"
+          fi  
 
 
       - name: 🔍 Filesystem Security Scan
