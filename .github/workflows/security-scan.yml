@@ -159,23 +159,24 @@ jobs:
           echo "✅ Security tools installed successfully"
 
       - name: 🔐 Configure Snyk Authentication
-        if: env.SCAN_DEPTH == 'comprehensive' || env.SCAN_DEPTH == 'standard'
+        if: ${{ env.SCAN_DEPTH == 'comprehensive' || env.SCAN_DEPTH == 'standard' }}
         env:
-          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+            SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         run: |
-          if [ -n "$SNYK_TOKEN" ]; then
-            echo "🔑 Authenticating with Snyk..."
-            echo "$SNYK_TOKEN" | snyk auth --auth-type=token
-            if [ $? -eq 0 ]; then
-              echo "✅ Snyk authenticated successfully"
-            else
-              echo "⚠️ Snyk authentication failed, continuing without Snyk"
-              echo "SKIP_SNYK=true" >> $GITHUB_ENV
-            fi
-          else
-            echo "⚠️ SNYK_TOKEN not found, skipping Snyk authentication"
-            echo "SKIP_SNYK=true" >> $GITHUB_ENV
-          fi
+         if [ -n "$SNYK_TOKEN" ]; then
+           echo "🔑 Authenticating with Snyk..."
+           echo "$SNYK_TOKEN" | snyk auth --auth-type=token
+           if [ $? -eq 0 ]; then
+             echo "✅ Snyk authenticated successfully"
+           else
+             echo "⚠️ Snyk authentication failed, continuing without Snyk"     
+             echo "SKIP_SNYK=true" >> $GITHUB_ENV
+           fi
+         else
+           echo "⚠️ SNYK_TOKEN not found, skipping Snyk authentication"
+           echo "SKIP_SNYK=true" >> $GITHUB_ENV
+         fi  
+
 
       - name: 🔍 Filesystem Security Scan
         id: trivy-fs
