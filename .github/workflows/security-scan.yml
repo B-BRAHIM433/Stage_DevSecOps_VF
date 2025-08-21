@@ -18,8 +18,11 @@ on:
         description: 'Callback URL for results'
         required: true
         type: string
+      timestamp:   # 👈 à ajouter si tu veux garder l’input
+        description: 'Horodatage du déclenchement'
+        required: false
       scan_depth:
-        description: 'Scan depth level'
+        description: 'Niveau de scan (quick, standard, deep)'
         required: false
         default: 'standard'
         type: choice
