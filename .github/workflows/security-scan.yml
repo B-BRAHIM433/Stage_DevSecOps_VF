@@ -36,7 +36,7 @@ env:
   CALLBACK_URL: ${{ github.event.inputs.callback_url }}
   TARGET_REPO: ${{ github.event.inputs.target_repo }}
   SCAN_DEPTH: ${{ github.event.inputs.scan_depth }}
-  SCAN_TIMESTAMP: ${{ github.event.inputs.scan_timestamp }}
+  SCAN_TIMESTAMP: ${{ github.event.inputs.timestamp }}
 
 jobs:
   security-scan:
@@ -394,11 +394,11 @@ jobs:
           print(f"TOTAL={total}")
           # Save to environment file
           with open(os.environ.get('GITHUB_ENV', '/dev/null'), 'a') as f:
-          f.write(f"CRITICAL_COUNT={total_counts['critical']}\n")
-          f.write(f"HIGH_COUNT={total_counts['high']}\n")
-          f.write(f"MEDIUM_COUNT={total_counts['medium']}\n")
-          f.write(f"LOW_COUNT={total_counts['low']}\n")
-          f.write(f"TOTAL_VULNERABILITIES={total}\n")
+              f.write(f"CRITICAL_COUNT={total_counts['critical']}\n")
+              f.write(f"HIGH_COUNT={total_counts['high']}\n")
+              f.write(f"MEDIUM_COUNT={total_counts['medium']}\n")
+              f.write(f"LOW_COUNT={total_counts['low']}\n")
+              f.write(f"TOTAL_VULNERABILITIES={total}\n")
           EOF
           
           # Run Python script
