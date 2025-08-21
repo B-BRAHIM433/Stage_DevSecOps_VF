@@ -33,9 +33,10 @@ on:
 
 env:
   SCAN_ID: ${{ github.event.inputs.scan_id }}
-  TARGET_REPO: ${{ github.event.inputs.target_repo }}
   CALLBACK_URL: ${{ github.event.inputs.callback_url }}
+  TARGET_REPO: ${{ github.event.inputs.target_repo }}
   SCAN_DEPTH: ${{ github.event.inputs.scan_depth }}
+  SCAN_TIMESTAMP: ${{ github.event.inputs.scan_timestamp }}
 
 jobs:
   security-scan:
