@@ -462,32 +462,52 @@ jobs:
           LOW_COUNT=${LOW_COUNT:-0}
           TOTAL_VULNERABILITIES=${TOTAL_VULNERABILITIES:-0}
           
-          # Create callback payload
-          cat > callback-payload.json << EOF
-            {
-              "scan_id": "${{ env.SCAN_ID }}",
-              "status": "$FINAL_STATUS",
-              "repository": "${{ env.REPO_NAME }}",
-              "github_url": "${{ env.TARGET_REPO }}",
-              "duration": $DURATION,
-              "files_scanned": ${{ env.FILES_SCANNED }},
-              "start_time": "${{ env.SCAN_TIMESTAMP }}",
-              "completed_at": "$(date -u '+%Y-%m-%d %H:%M:%S UTC')",
-              "results": {
-                "critical": $CRITICAL_COUNT,
-                "high": $HIGH_COUNT,
-                "medium": $MEDIUM_COUNT,
-                "low": $LOW_COUNT,
-                "total": $TOTAL_VULNERABILITIES,
-                "scan_timestamp": "${{ env.SCAN_TIMESTAMP }}",
-                "scan_depth": "${{ env.SCAN_DEPTH }}",
-                "tools_used": ["trivy", "snyk"]
-              }
+          # Create callback payload using printf (more reliable than heredoc)
+          printf '{
+            "scan_id": "%s",
+            "status": "%s",
+            "repository": "%s",
+            "github_url": "%s",
+            "duration": %d,
+            "files_scanned": %d,
+            "start_time": "%s",
+            "completed_at": "%s",
+            "results": {
+              "critical": %d,
+              "high": %d,
+              "medium": %d,
+              "low": %d,
+              "total": %d,
+              "scan_timestamp": "%s",
+              "scan_depth": "%s",
+              "tools_used": ["trivy", "snyk"]
             }
-            EOF
+          }' \
+            "${{ env.SCAN_ID }}" \
+            "$FINAL_STATUS" \
+            "${{ env.REPO_NAME }}" \
+            "${{ env.TARGET_REPO }}" \
+            "$DURATION" \
+            "${{ env.FILES_SCANNED }}" \
+            "${{ env.SCAN_TIMESTAMP }}" \
+            "$(date -u '+%Y-%m-%d %H:%M:%S UTC')" \
+            "$CRITICAL_COUNT" \
+            "$HIGH_COUNT" \
+            "$MEDIUM_COUNT" \
+            "$LOW_COUNT" \
+            "$TOTAL_VULNERABILITIES" \
+            "${{ env.SCAN_TIMESTAMP }}" \
+            "${{ env.SCAN_DEPTH }}" > callback-payload.json
           
           echo "📋 Callback payload:"
           cat callback-payload.json
+          
+          # Validate JSON before sending
+          if ! python3 -m json.tool callback-payload.json > /dev/null 2>&1; then
+            echo "❌ Generated JSON is invalid!"
+            cat callback-payload.json
+            exit 1
+          fi
           
           # Send to callback URL with retries
           CALLBACK_SUCCESS=false
@@ -538,7 +558,6 @@ jobs:
           # Set outputs
           echo "duration=$DURATION" >> $GITHUB_OUTPUT
           echo "final-status=$FINAL_STATUS" >> $GITHUB_OUTPUT
-
       - name: 📋 Final Status
         id: final-status
         if: always()
