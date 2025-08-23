@@ -1,9 +1,12 @@
 # 🔒 DevSecOps Security Scanning Platform For Your App Code ...
 
+<<<<<<< HEAD
 A DevSecOps web platform that allows users to submit a **GitHub repository URL** and receive **real-time security scan results** in a dashboard.  
+=======
+ A **DevSecOps web platform** that allows users to submit a **GitHub repository URL** and receive **real-time security scan results** in a dashboard.  
+>>>>>>> b8f1ac961676e3592c1b807c8ba111ded85d6439
 The scanning is performed by **GitHub Actions** using **Snyk** for dependency, code, and container security analysis.
 This is a project realised by AIT MOUHA OUALLA HAMZA and BAYCHOU BRAHIM (Students at ENSAS School) in collaboration with TASMIM WEB Startup.
----
 
 ## 📌 Features
 
