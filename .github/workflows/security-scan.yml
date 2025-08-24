@@ -507,80 +507,80 @@ jobs:
             echo "  📋 Detailed vulnerabilities: $DETAILED_COUNT"
           fi
           
-          - name: 📤 Send Results to Backend
-            id: send-results
-            if: always()
-            run: |
-              echo "📤 Sending results to callback URL..."
+      - name: 📤 Send Results to Backend
+        id: send-results
+        if: always()
+        run: |
+          echo "📤 Sending results to callback URL..."
               
-              # Calculate scan duration
-              SCAN_END_TIME=$(date +%s)
-              DURATION=$((SCAN_END_TIME - SCAN_START_TIME))
+          # Calculate scan duration
+          SCAN_END_TIME=$(date +%s)
+          DURATION=$((SCAN_END_TIME - SCAN_START_TIME))
+           
+             # Determine final status
+          FINAL_STATUS="completed"
+          if [ "${{ job.status }}" = "failure" ] || [ "${{ job.status }}" = "cancelled" ]; then
+            FINAL_STATUS="failed"
+          fi
               
-              # Determine final status
-              FINAL_STATUS="completed"
-              if [ "${{ job.status }}" = "failure" ] || [ "${{ job.status }}" = "cancelled" ]; then
-                FINAL_STATUS="failed"
-              fi
-              
-              # Get vulnerability counts (with defaults)
-              CRITICAL_COUNT=${CRITICAL_COUNT:-0}
-              HIGH_COUNT=${HIGH_COUNT:-0}
-              MEDIUM_COUNT=${MEDIUM_COUNT:-0}
-              LOW_COUNT=${LOW_COUNT:-0}
-              TOTAL_VULNERABILITIES=${TOTAL_VULNERABILITIES:-0}
-              
-              # Read detailed vulnerabilities if file exists
-              DETAILED_VULNS="[]"
-              if [ -f "scan-results/detailed-vulnerabilities.json" ]; then
-                DETAILED_VULNS=$(cat scan-results/detailed-vulnerabilities.json | jq -c '.')
-                echo "📋 Found $(echo "$DETAILED_VULNS" | jq length) detailed vulnerabilities"
-              elif [ -f "detailed-vulnerabilities.json" ]; then
-                DETAILED_VULNS=$(cat detailed-vulnerabilities.json | jq -c '.')
-                echo "📋 Found $(echo "$DETAILED_VULNS" | jq length) detailed vulnerabilities"
-              fi
+          # Get vulnerability counts (with defaults)
+          TICAL_COUNT=${CRITICAL_COUNT:-0}
+          HIGH_COUNT=${HIGH_COUNT:-0}
+          MEDIUM_COUNT=${MEDIUM_COUNT:-0}
+          LOW_COUNT=${LOW_COUNT:-0}
+          TOTAL_VULNERABILITIES=${TOTAL_VULNERABILITIES:-0}
+             
+          # Read detailed vulnerabilities if file exists
+          DETAILED_VULNS="[]"
+          if [ -f "scan-results/detailed-vulnerabilities.json" ]; then
+            DETAILED_VULNS=$(cat scan-results/detailed-vulnerabilities.json | jq -c '.')
+            echo "📋 Found $(echo "$DETAILED_VULNS" | jq length) detailed vulnerabilities"
+          elif [ -f "detailed-vulnerabilities.json" ]; then
+            DETAILED_VULNS=$(cat detailed-vulnerabilities.json | jq -c '.')
+            echo "📋 Found $(echo "$DETAILED_VULNS" | jq length) detailed vulnerabilities"
+          fi
               
               # Create callback payload with detailed vulnerabilities using jq
-              jq -n \
-                --arg scan_id "${{ env.SCAN_ID }}" \
-                --arg status "$FINAL_STATUS" \
-                --arg repository "${{ env.REPO_NAME }}" \
-                --arg github_url "${{ env.TARGET_REPO }}" \
-                --argjson duration "$DURATION" \
-                --argjson files_scanned "${{ env.FILES_SCANNED }}" \
-                --arg start_time "${{ env.SCAN_TIMESTAMP }}" \
-                --arg completed_at "$(date -u '+%Y-%m-%d %H:%M:%S UTC')" \
-                --argjson critical "$CRITICAL_COUNT" \
-                --argjson high "$HIGH_COUNT" \
-                --argjson medium "$MEDIUM_COUNT" \
-                --argjson low "$LOW_COUNT" \
-                --argjson total "$TOTAL_VULNERABILITIES" \
-                --arg scan_timestamp "${{ env.SCAN_TIMESTAMP }}" \
-                --arg scan_depth "${{ env.SCAN_DEPTH }}" \
-                --argjson detailed_vulnerabilities "$DETAILED_VULNS" \
-                '{
-                  scan_id: $scan_id,
-                  status: $status,
-                  repository: $repository,
-                  github_url: $github_url,
-                  duration: $duration,
-                  files_scanned: $files_scanned,
-                  start_time: $start_time,
-                  completed_at: $completed_at,
-                  results: {
-                    critical: $critical,
-                    high: $high,
-                    medium: $medium,
-                    low: $low,
-                    total: $total,
-                    scan_timestamp: $scan_timestamp,
-                    scan_depth: $scan_depth,
-                    tools_used: ["trivy", "snyk"],
-                    detailed_vulnerabilities: $detailed_vulnerabilities
-                  }
-                }' > callback-payload.json
+          jq -n \
+            --arg scan_id "${{ env.SCAN_ID }}" \
+            --arg status "$FINAL_STATUS" \
+            --arg repository "${{ env.REPO_NAME }}" \
+            --arg github_url "${{ env.TARGET_REPO }}" \
+            --argjson duration "$DURATION" \
+            --argjson files_scanned "${{ env.FILES_SCANNED }}" \
+            --arg start_time "${{ env.SCAN_TIMESTAMP }}" \
+            --arg completed_at "$(date -u '+%Y-%m-%d %H:%M:%S UTC')" \
+            --argjson critical "$CRITICAL_COUNT" \
+            --argjson high "$HIGH_COUNT" \
+            --argjson medium "$MEDIUM_COUNT" \
+            --argjson low "$LOW_COUNT" \
+            --argjson total "$TOTAL_VULNERABILITIES" \
+            --arg scan_timestamp "${{ env.SCAN_TIMESTAMP }}" \
+            --arg scan_depth "${{ env.SCAN_DEPTH }}" \
+            --argjson detailed_vulnerabilities "$DETAILED_VULNS" \
+            '{
+              scan_id: $scan_id,
+              status: $status,
+              repository: $repository,
+              github_url: $github_url,
+              duration: $duration,
+              files_scanned: $files_scanned,
+              start_time: $start_time,
+              completed_at: $completed_at,
+              results: {
+                critical: $critical,
+                high: $high,
+                medium: $medium,
+                low: $low,
+                total: $total,
+                scan_timestamp: $scan_timestamp,
+                scan_depth: $scan_depth,
+                tools_used: ["trivy", "snyk"],
+                detailed_vulnerabilities: $detailed_vulnerabilities
+                }
+             }' > callback-payload.json
               
-              echo "📋 Callback payload created with $(echo "$DETAILED_VULNS" | jq -r 'length') detailed vulnerabilities"
+             echo "📋 Callback payload created with $(echo "$DETAILED_VULNS" | jq -r 'length') detailed vulnerabilities"
               
               # Show summary of payload (without showing full detailed vulnerabilities to avoid log spam)
               echo "📋 Payload summary:"
