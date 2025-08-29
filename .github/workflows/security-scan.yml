@@ -496,15 +496,7 @@ jobs:
             "tools_used": ["trivy", "snyk"]
           }
           EOF
-          
-          echo "📊 Results Summary:"
-          f.write(f" 🔴 Critical: {total_counts['critical']}\n")     
-          f.write(f" 🟠 High: {total_counts['high']}\n")
-          f.write(f" 🟡 Medium: {total_counts['medium']}\n") 
-          f.write(f" 🟢 Low: {total_counts['low']}\n")
-          f.write(f" 📊 Total: {total}\n")
-          echo "  📁 Files scanned: ${{ env.FILES_SCANNED }}"
-          
+                  
           # Show count of detailed vulnerabilities found
           if [ -f "detailed-vulnerabilities.json" ]; then
             DETAILED_COUNT=$(python3 -c "import json; print(len(json.load(open('detailed-vulnerabilities.json'))))" 2>/dev/null || echo "0")
