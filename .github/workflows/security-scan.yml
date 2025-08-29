@@ -151,9 +151,13 @@ jobs:
           
           # Verify installations
           echo "🔍 Verifying installations..."
+          echo "Trivy version : "
           trivy --version
+          echo "Snyk version : "
           snyk --version
+          echo "Node version : "
           node --version
+          echo "npm version : "
           npm --version
           
           echo "✅ Security tools installed successfully"
@@ -494,11 +498,11 @@ jobs:
           EOF
           
           echo "📊 Results Summary:"
-          echo "  🔴 Critical: $CRITICAL"
-          echo "  🟠 High: $HIGH"  
-          echo "  🟡 Medium: $MEDIUM"
-          echo "  🟢 Low: $LOW"
-          echo "  📊 Total: $TOTAL vulnerabilities"
+          f.write(f" 🔴 Critical: {total_counts['critical']}\n")     
+          f.write(f" 🟠 High: {total_counts['high']}\n")
+          f.write(f" 🟡 Medium: {total_counts['medium']}\n") 
+          f.write(f" 🟢 Low: {total_counts['low']}\n")
+          f.write(f" 📊 Total: {total}\n")
           echo "  📁 Files scanned: ${{ env.FILES_SCANNED }}"
           
           # Show count of detailed vulnerabilities found
@@ -674,43 +678,6 @@ jobs:
             callback-response.json
           retention-days: 30
           if-no-files-found: warn
-
-  # Summary job for workflow results
-  summary:
-    name: 📄 Scan Summary  
-    needs: security-scan
-    if: always()
-    runs-on: ubuntu-latest
-    
-    steps:
-      - name: 📋 Generate Summary
-        run: |
-          echo "# 🛡️ Security Scan Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "## 📊 Results" >> $GITHUB_STEP_SUMMARY
-          echo "- **Repository:** ${{ env.TARGET_REPO }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Scan ID:** ${{ env.SCAN_ID }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Status:** ${{ needs.security-scan.outputs.scan-status }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Total Vulnerabilities:** ${{ needs.security-scan.outputs.vulnerabilities-found }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
-          # Vulnerability breakdown
-          if [ "${{ needs.security-scan.outputs.vulnerabilities-found }}" != "0" ]; then
-            echo "## 🚨 Vulnerability Breakdown" >> $GITHUB_STEP_SUMMARY
-            echo "- 🔴 **Critical:** ${{ needs.security-scan.outputs.critical-count }}" >> $GITHUB_STEP_SUMMARY
-            echo "- 🟠 **High:** ${{ needs.security-scan.outputs.high-count }}" >> $GITHUB_STEP_SUMMARY
-            echo "- 🟡 **Medium:** ${{ needs.security-scan.outputs.medium-count }}" >> $GITHUB_STEP_SUMMARY
-            echo "- 🟢 **Low:** ${{ needs.security-scan.outputs.low-count }}" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "⚠️ **Please review the detailed results in the artifacts.**" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "## ✅ Clean Scan" >> $GITHUB_STEP_SUMMARY
-            echo "🎉 No security vulnerabilities detected!" >> $GITHUB_STEP_SUMMARY
-          fi
-          
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "---" >> $GITHUB_STEP_SUMMARY
-          echo "*Scan completed at $(date -u '+%Y-%m-%d %H:%M:%S UTC')*" >> $GITHUB_STEP_SUMMARY
 
 # name: Security Scan Pipeline
 
