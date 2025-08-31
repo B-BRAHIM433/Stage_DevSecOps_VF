@@ -1,70 +1,151 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import {
+  AlertCircle,
+  AlertTriangle,
+  Bell,
+  Bug,
+  CheckCircle,
+  Clock,
+  Download,
+  Eye,
+  Info,
+  Moon,
+  RotateCcw,
+  Search,
+  Shield,
+  Sun,
+  X,
+  XCircle,
+} from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
+// ✅ Service API mis à jour pour utiliser la nouvelle API backend
 const apiService = {
-  baseUrl: 'http://localhost:3001',
-  
-  async startScan(repository, scanDepth = 'standard') {
-    console.log('🚀 Démarrage du scan:', { repository, scanDepth });
-    
+  baseUrl: "http://localhost:3001",
+
+  async startScan(githubUrl, scanDepth = "standard") {
+    console.log("🚀 Démarrage du scan:", { githubUrl, scanDepth });
+
     try {
-      const response = await fetch(`${this.baseUrl}/api/start-scan`, {
-        method: 'POST',
+      const response = await fetch(`${this.baseUrl}/api/scan/trigger`, {
+        method: "POST",
         headers: {
-          'Content-Type': 'application/json',
+          "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          repository,
+          githubUrl,
           scanDepth,
-          userId: this.getUserId(),
-          timestamp: new Date().toISOString()
         }),
       });
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.error || `HTTP ${response.status}: ${response.statusText}`);
+        throw new Error(
+          errorData.error || `HTTP ${response.status}: ${response.statusText}`
+        );
       }
 
       const result = await response.json();
-      console.log('✅ Scan démarré:', result);
+      console.log("✅ Scan démarré:", result);
       return result;
     } catch (error) {
-      console.error('❌ Erreur démarrage scan:', error);
+      console.error("❌ Erreur démarrage scan:", error);
       throw error;
     }
   },
 
-  // Vérifier le statut d'un scan
-  async getScanStatus(scanId) {
+  async getScanDetails(scanId) {
     try {
-      const response = await fetch(`${this.baseUrl}/api/scan-status/${scanId}`);
+      const response = await fetch(`${this.baseUrl}/api/scan/${scanId}`);
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       return await response.json();
     } catch (error) {
-      console.error('❌ Erreur statut scan:', error);
+      console.error("❌ Erreur détails scan:", error);
       throw error;
     }
   },
 
-  // Récupérer les résultats d'un scan
-  async getScanResults(scanId) {
+  // ✅ NOUVEAU: Récupérer les vulnérabilités depuis la nouvelle API
+  async getScanVulnerabilities(scanId) {
     try {
-      const response = await fetch(`${this.baseUrl}/api/scan-results/${scanId}`);
+      const response = await fetch(
+        `${this.baseUrl}/api/scan/${scanId}/vulnerabilities`
+      );
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       return await response.json();
     } catch (error) {
-      console.error('❌ Erreur résultats scan:', error);
+      console.error("❌ Erreur vulnérabilités scan:", error);
       throw error;
     }
   },
 
-  // Récupérer la liste des scans
+  // ✅ Export amélioré avec vraies données de la DB
+  async exportVulnerabilities(scanId) {
+    try {
+      // Get vulnerabilities from database
+      const vulnerabilities = await this.getScanVulnerabilities(scanId);
+
+      // Convert to CSV
+      const csvContent = this.convertToCSV(vulnerabilities);
+
+      // Download file
+      const blob = new Blob([csvContent], { type: "text/csv" });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `vulnerabilities-${scanId}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+
+      return { success: true };
+    } catch (error) {
+      console.error("❌ Erreur export:", error);
+      throw error;
+    }
+  },
+
+  convertToCSV(vulnerabilities) {
+    if (!vulnerabilities || vulnerabilities.length === 0) {
+      return "No vulnerabilities found";
+    }
+
+    const headers = [
+      "Vulnerability ID",
+      "Title",
+      "Severity",
+      "Package",
+      "Installed Version",
+      "Fixed Version",
+      "Description",
+      "References",
+    ];
+
+    const rows = vulnerabilities.map((vuln) => [
+      vuln.vuln_id || "",
+      vuln.title || "",
+      vuln.severity || "",
+      vuln.package_name || "",
+      vuln.version || "",
+      vuln.fixed_version || "",
+      (vuln.description || "").replace(/"/g, '""'), // Escape quotes
+      vuln.reference_links || "",
+    ]);
+
+    const csvContent = [
+      headers.join(","),
+      ...rows.map((row) => row.map((field) => `"${field}"`).join(",")),
+    ].join("\n");
+
+    return csvContent;
+  },
+
   async getScans(params = {}) {
-    const { limit = 20, status = 'all', search = '' } = params;
+    const { limit = 20, status = "all", search = "" } = params;
     const queryParams = new URLSearchParams({
       limit: limit.toString(),
       status,
-      search
+      search,
     });
 
     try {
@@ -72,1682 +153,1692 @@ const apiService = {
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       return await response.json();
     } catch (error) {
-      console.error('❌ Erreur récupération scans:', error);
+      console.error("❌ Erreur récupération scans:", error);
       throw error;
     }
   },
 
-  // Supprimer un scan
-  async deleteScan(scanId) {
+  async getStats() {
     try {
-      const response = await fetch(`${this.baseUrl}/api/scans/${scanId}`, {
-        method: 'DELETE'
-      });
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.message || `HTTP ${response.status}`);
-      }
+      const response = await fetch(`${this.baseUrl}/api/stats`);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
       return await response.json();
     } catch (error) {
-      console.error('❌ Erreur suppression scan:', error);
+      console.error("❌ Erreur stats:", error);
       throw error;
     }
   },
 
-  // Helper pour l'ID utilisateur
-  getUserId() {
-    return `user_${Date.now()}`;
-  }
+  // ✅ NOUVEAU: Statistiques des vulnérabilités
+  async getVulnerabilitiesStats() {
+    try {
+      const response = await fetch(`${this.baseUrl}/api/stats/vulnerabilities`);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return await response.json();
+    } catch (error) {
+      console.error("❌ Erreur stats vulnérabilités:", error);
+      throw error;
+    }
+  },
 };
 
+// ✅ WebSocket service simplifié pour les mises à jour temps réel
+// WebSocketService.js
+class WebSocketService {
+  constructor() {
+    this.callbacks = {};
+    this.pollInterval = null;
+    this.isPolling = false;
+  }
+
+  subscribe(key, callback) {
+    this.callbacks[key] = callback;
+  }
+
+  unsubscribe(key) {
+    delete this.callbacks[key];
+  }
+
+  // ✅ Start polling only if needed and with proper cleanup
+  startPolling(fetchRunningScans) {
+    if (this.isPolling || this.pollInterval) return;
+    
+    this.isPolling = true;
+    console.log("🔄 Starting polling for running scans...");
+
+    this.pollInterval = setInterval(async () => {
+      try {
+        const hasRunning = await fetchRunningScans();
+        if (!hasRunning) {
+          console.log("✅ No running scans, stopping polling");
+          this.stopPolling();
+          return;
+        }
+        
+        // Only trigger updates if we have callbacks
+        if (Object.keys(this.callbacks).length > 0) {
+          Object.values(this.callbacks).forEach(cb => {
+            try {
+              cb({ type: "poll_update" });
+            } catch (error) {
+              console.error("❌ Error in callback:", error);
+            }
+          });
+        }
+      } catch (error) {
+        console.error("❌ Error during polling:", error);
+        // Stop polling on error to prevent infinite failures
+        this.stopPolling();
+      }
+    }, 5000);
+  }
+
+  stopPolling() {
+    if (this.pollInterval) {
+      clearInterval(this.pollInterval);
+      this.pollInterval = null;
+    }
+    this.isPolling = false;
+    console.log("🛑 Polling stopped");
+  }
+
+  // Cleanup method
+  cleanup() {
+    this.stopPolling();
+    this.callbacks = {};
+  }
+}
+
+// Create global WebSocket instance
+const wsService = new WebSocketService();
+
 function App() {
-  const [githubUrl, setGithubUrl] = useState('');
+  // États principaux
+  const [githubUrl, setGithubUrl] = useState("");
   const [scans, setScans] = useState([]);
   const [currentScan, setCurrentScan] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [ws, setWs] = useState(null);
   const [darkMode, setDarkMode] = useState(true);
-  
+  const [stats, setStats] = useState({});
+  const [vulnStats, setVulnStats] = useState({});
+
+  // États de l'interface
   const [selectedScan, setSelectedScan] = useState(null);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [filterStatus, setFilterStatus] = useState('all');
-  const [wsReconnecting, setWsReconnecting] = useState(false);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [filterStatus, setFilterStatus] = useState("all");
   const [notifications, setNotifications] = useState([]);
   const [showNotifications, setShowNotifications] = useState(false);
-  const [deletingScans, setDeletingScans] = useState(new Set());
-  const [selectedScansForDeletion, setSelectedScansForDeletion] = useState(new Set());
-  const [showDeleteConfirm, setShowDeleteConfirm] = useState(null);
-  const [scanDepth, setScanDepth] = useState('standard');
+  const [scanDepth, setScanDepth] = useState("standard");
+  const [selectedVulnerabilities, setSelectedVulnerabilities] = useState(null);
+  const [connectionStatus, setConnectionStatus] = useState("connected");
 
-  const theme = useMemo(() => ({
-    bg: darkMode ? '#0f0f23' : '#f8f9fa',
-    cardBg: darkMode ? '#1e1e3f' : 'white',
-    text: darkMode ? '#ffffff' : '#2c3e50',
-    textMuted: darkMode ? '#a0a0a0' : '#6c757d',
-    border: darkMode ? '#404040' : '#e1e8ed',
-    primary: '#3498db',
-    success: '#27ae60',
-    warning: '#f39c12',
-    danger: '#e74c3c',
-    info: '#17a2b8'
-  }), [darkMode]);
+  // Thème
+  const theme = useMemo(
+    () => ({
+      bg: darkMode ? "bg-gray-900" : "bg-gray-50",
+      cardBg: darkMode ? "bg-gray-800" : "bg-white",
+      text: darkMode ? "text-white" : "text-gray-900",
+      textMuted: darkMode ? "text-gray-400" : "text-gray-600",
+      border: darkMode ? "border-gray-700" : "border-gray-200",
+      primary: "text-blue-500",
+      success: "text-green-500",
+      warning: "text-yellow-500",
+      danger: "text-red-500",
+      info: "text-blue-500",
+    }),
+    [darkMode]
+  );
 
-  const addNotification = useCallback((message, type = 'info') => {
-    const id = Date.now();
-    const notification = { 
-      id, 
-      message, 
-      type, 
-      timestamp: new Date(),
-      read: false 
-    };
-    
-    setNotifications(prev => [notification, ...prev.slice(0, 9)]); // Max 10 notifications
-    
-    // Auto-suppression après 5 secondes pour les succès/infos
-    if (type === 'success' || type === 'info') {
-      setTimeout(() => {
-        setNotifications(prev => prev.filter(n => n.id !== id));
-      }, 5000);
+  // Gestion des notifications
+  const addNotification = useCallback(
+    (message, type = "info", persistent = false) => {
+      const id = Date.now();
+      const notification = {
+        id,
+        message,
+        type,
+        timestamp: new Date(),
+        persistent,
+      };
+
+      setNotifications((prev) => [notification, ...prev.slice(0, 9)]);
+
+      if (!persistent && (type === "success" || type === "info")) {
+        setTimeout(() => {
+          setNotifications((prev) => prev.filter((n) => n.id !== id));
+        }, 5000);
+      }
+    },
+    []
+  );
+
+  // ✅ Fonction pour gérer le polling des scans
+  const managePolling = useCallback(async () => {
+    try {
+      const runningScans = await apiService.getScans({ status: "running" });
+      const hasRunning = runningScans && runningScans.length > 0;
+      
+      if (hasRunning) {
+        console.log("🚀 Starting polling for running scans");
+        wsService.startPolling(async () => {
+          const currentRunning = await apiService.getScans({ status: "running" });
+          return currentRunning && currentRunning.length > 0;
+        });
+      } else {
+        console.log("✅ No running scans, stopping polling");
+        wsService.stopPolling();
+      }
+    } catch (error) {
+      console.error("❌ Error managing polling:", error);
+      wsService.stopPolling();
     }
   }, []);
 
-  // ✅ RÉCUPÉRATION DES SCANS AVEC RETRY
-  const fetchScans = useCallback(async (retries = 3) => {
-    try {
-      const data = await apiService.getScans({
-        limit: 50,
-        status: filterStatus,
-        search: searchTerm
-      });
-      setScans(data);
-    } catch (err) {
-      console.error('❌ Erreur récupération scans:', err);
-      if (retries > 0) {
-        setTimeout(() => fetchScans(retries - 1), 2000);
-      } else {
-        addNotification('Impossible de charger l\'historique', 'error');
+  // ✅ Setup WebSocket/Polling pour les mises à jour
+  useEffect(() => {
+    // Function to check if there are any running scans
+    const fetchRunningScans = async () => {
+      try {
+        const data = await apiService.getScans({ status: "running" });
+        const hasRunning = data && data.length > 0;
+        console.log("🔍 Running scans check:", hasRunning ? `${data.length} running` : "none");
+        return hasRunning;
+      } catch (error) {
+        console.error("❌ Error checking running scans:", error);
+        return false;
       }
+    };
+
+    // Subscribe to updates
+    wsService.subscribe("all", (data) => {
+      if (data.type === "poll_update" || data.type === "scan_update") {
+        console.log("📡 Received update:", data.type);
+        fetchScans();
+        fetchStats();
+        fetchVulnStats();
+        
+        // Check if we should stop polling after updates
+        setTimeout(() => {
+          managePolling();
+        }, 1000);
+      }
+    });
+
+    // Start polling if there are running scans
+    const checkAndStartPolling = async () => {
+      const hasRunning = await fetchRunningScans();
+      if (hasRunning) {
+        wsService.startPolling(fetchRunningScans);
+      }
+    };
+
+    checkAndStartPolling();
+
+    return () => {
+      wsService.unsubscribe("all");
+      wsService.cleanup();
+    };
+  }, [managePolling]);
+
+  // Récupération des données
+  const fetchScans = useCallback(
+    async (retries = 3) => {
+      try {
+        const data = await apiService.getScans({
+          limit: 50,
+          status: filterStatus,
+          search: searchTerm,
+        });
+        setScans(data);
+
+        // ✅ Mise à jour du scan courant s'il existe
+        if (currentScan) {
+          const updatedCurrentScan = data.find(
+            (scan) => scan.id === currentScan.id
+          );
+          if (updatedCurrentScan) {
+            setCurrentScan(updatedCurrentScan);
+          }
+        }
+      } catch (err) {
+        console.error("❌ Erreur récupération scans:", err);
+        if (retries > 0) {
+          setTimeout(() => fetchScans(retries - 1), 2000);
+        } else {
+          addNotification("Impossible de charger l'historique", "error", true);
+        }
+      }
+    },
+    [filterStatus, searchTerm, addNotification, currentScan]
+  );
+
+  const fetchStats = useCallback(async () => {
+    try {
+      const data = await apiService.getStats();
+      setStats(data);
+    } catch (error) {
+      console.error("❌ Erreur stats:", error);
     }
-  }, [filterStatus, searchTerm, addNotification]);
+  }, []);
+
+  // ✅ NOUVEAU: Récupérer les stats des vulnérabilités
+  const fetchVulnStats = useCallback(async () => {
+    try {
+      const data = await apiService.getVulnerabilitiesStats();
+      setVulnStats(data);
+    } catch (error) {
+      console.error("❌ Erreur stats vulnérabilités:", error);
+    }
+  }, []);
 
   useEffect(() => {
     fetchScans();
-  }, [fetchScans]);
+    fetchStats();
+    fetchVulnStats();
+  }, [fetchScans, fetchStats, fetchVulnStats]);
 
-  // ✅ VALIDATION URL GITHUB AMÉLIORÉE
+  // Validation URL GitHub
   const isValidGitHubUrl = (url) => {
-    const githubRegex = /^https:\/\/github\.com\/[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+\/?$/;
+    const githubRegex =
+      /^https:\/\/github\.com\/[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+\/?$/;
     return githubRegex.test(url.trim());
   };
 
-  // ✅ DÉMARRAGE DE SCAN AVEC GESTION D'ERREURS ROBUSTE
+  // Démarrage de scan
   const handleScan = async (e) => {
     e.preventDefault();
-    
+
     if (!isValidGitHubUrl(githubUrl)) {
-      const errorMsg = 'Veuillez entrer une URL GitHub valide (ex: https://github.com/user/repo)';
+      const errorMsg =
+        "Veuillez entrer une URL GitHub valide (ex: https://github.com/user/repo)";
       setError(errorMsg);
-      addNotification(errorMsg, 'error');
+      addNotification(errorMsg, "error");
       return;
     }
 
     setLoading(true);
     setError(null);
     setCurrentScan(null);
-    
+
     try {
-      console.log('🚀 Démarrage du scan...', { githubUrl, scanDepth });
-      
+      console.log("🚀 Démarrage du scan...", { githubUrl, scanDepth });
+
       const result = await apiService.startScan(githubUrl, scanDepth);
-      
+
       if (result.success && result.scan) {
         setCurrentScan(result.scan);
-        setGithubUrl('');
-        addNotification(`🚀 Scan démarré pour ${result.scan.repository}`, 'success');
-        
-        // Démarrer le polling du statut
-        startPolling(result.scan.scanId || result.scan.id);
+        setGithubUrl("");
+        addNotification(
+          `🚀 Scan démarré pour ${result.scan.repository}`,
+          "success"
+        );
+        fetchStats();
       } else {
-        throw new Error(result.error || 'Réponse invalide du serveur');
+        throw new Error(result.error || "Réponse invalide du serveur");
       }
     } catch (err) {
-      const errorMsg = err.message || 'Erreur lors du démarrage du scan';
+      const errorMsg = err.message || "Erreur lors du démarrage du scan";
       setError(errorMsg);
-      addNotification(errorMsg, 'error');
-      console.error('❌ Erreur scan:', err);
+      addNotification(errorMsg, "error", true);
+      console.error("❌ Erreur scan:", err);
     } finally {
       setLoading(false);
     }
   };
 
-  // ✅ POLLING DU STATUT AVEC TIMEOUT
-  const startPolling = useCallback(async (scanId) => {
-    if (!scanId) return;
-    
-    const maxAttempts = 120; // 10 minutes avec 5s d'intervalle
-    let attempts = 0;
+  // Filtrage des scans
+  const filteredScans = useMemo(() => {
+    return scans
+      .filter((scan) => {
+        const matchesSearch =
+          !searchTerm ||
+          scan.repository?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+          scan.github_url?.toLowerCase().includes(searchTerm.toLowerCase());
+        const matchesFilter =
+          filterStatus === "all" || scan.status === filterStatus;
+        return matchesSearch && matchesFilter;
+      })
+      .sort((a, b) => new Date(b.start_time) - new Date(a.start_time));
+  }, [scans, searchTerm, filterStatus]);
 
-    const poll = async () => {
-      try {
-        attempts++;
-        console.log(`🔍 Polling statut scan ${scanId} (${attempts}/${maxAttempts})`);
-        
-        const statusResponse = await apiService.getScanStatus(scanId);
-        
-        if (statusResponse.success && statusResponse.scan) {
-          const scan = statusResponse.scan;
-          setCurrentScan(scan);
-          
-          if (scan.status === 'completed') {
-            console.log('✅ Scan terminé:', scan);
-            fetchScans(); // Actualiser la liste
-            return; // Arrêter le polling
-          } else if (scan.status === 'failed') {
-            console.log('❌ Scan échoué:', scan);
-            addNotification(`Scan échoué: ${scan.error_message || 'Erreur inconnue'}`, 'error');
-            return; // Arrêter le polling
-          } else if (scan.status === 'running' && attempts < maxAttempts) {
-            // Continuer le polling
-            setTimeout(poll, 5000);
-          } else if (attempts >= maxAttempts) {
-            addNotification('Timeout: le scan prend plus de temps que prévu', 'warning');
-            return;
-          }
-        } else if (attempts < maxAttempts) {
-          setTimeout(poll, 5000); // Retry sur erreur
-        }
-      } catch (error) {
-        console.error('❌ Erreur polling:', error);
-        if (attempts < maxAttempts) {
-          setTimeout(poll, 5000); // Retry sur erreur
-        } else {
-          addNotification('Erreur de communication avec le serveur', 'error');
-        }
-      }
-    };
-
-    poll();
-  }, [addNotification, fetchScans]);
-
-  // ✅ SUPPRESSION DE SCAN AMÉLIORÉE
-  const deleteScan = async (scanId) => {
-    setDeletingScans(prev => new Set([...prev, scanId]));
-    
-    try {
-      await apiService.deleteScan(scanId);
-      
-      // Mise à jour locale immédiate
-      setScans(prev => prev.filter(scan => scan.id !== scanId));
-      setSelectedScansForDeletion(prev => {
-        const newSet = new Set(prev);
-        newSet.delete(scanId);
-        return newSet;
-      });
-      
-      if (selectedScan && selectedScan.id === scanId) {
-        setSelectedScan(null);
-      }
-
-      addNotification('✅ Scan supprimé avec succès', 'success');
-    } catch (err) {
-      console.error('❌ Erreur suppression:', err);
-      addNotification(err.message || 'Erreur lors de la suppression', 'error');
-    } finally {
-      setDeletingScans(prev => {
-        const newSet = new Set(prev);
-        newSet.delete(scanId);
-        return newSet;
-      });
-      setShowDeleteConfirm(null);
+  // ✅ Fonctions utilitaires améliorées
+  const getStatusIcon = (status) => {
+    switch (status) {
+      case "pending":
+        return <Clock className="w-5 h-5 text-yellow-500" />;
+      case "running":
+        return <div className="w-5 h-5 text-blue-500 animate-spin">⚡</div>;
+      case "completed":
+        return <CheckCircle className="w-5 h-5 text-green-500" />;
+      case "failed":
+        return <XCircle className="w-5 h-5 text-red-500" />;
+      default:
+        return <AlertCircle className="w-5 h-5 text-gray-500" />;
     }
   };
 
-  // ✅ FILTRAGE AVANCÉ
-  const filteredScans = useMemo(() => {
-    return scans.filter(scan => {
-      const matchesSearch = !searchTerm || 
-        scan.repository?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        scan.github_url?.toLowerCase().includes(searchTerm.toLowerCase());
-      const matchesFilter = filterStatus === 'all' || scan.status === filterStatus;
-      return matchesSearch && matchesFilter;
-    }).sort((a, b) => new Date(b.start_time) - new Date(a.start_time));
-  }, [scans, searchTerm, filterStatus]);
-
-  // ✅ RELANCE DE SCAN
-  const rerunScan = async (scan) => {
-    const repoUrl = scan.github_url || `https://github.com/${scan.repository}`;
-    setGithubUrl(repoUrl);
-    setScanDepth('standard');
-    
-    // Scroll vers le formulaire
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-    
-    addNotification(`📋 URL copiée: ${scan.repository}`, 'info');
+  const getStatusLabel = (status) => {
+    const labels = {
+      pending: "En attente",
+      running: "En cours",
+      completed: "Terminé",
+      failed: "Échoué",
+    };
+    return labels[status] || "Inconnu";
   };
 
-  // ✅ COMPOSANTS UI
+  const getSeverityColor = (severity) => {
+    const colors = {
+      CRITICAL: "bg-red-600",
+      HIGH: "bg-orange-600",
+      MEDIUM: "bg-yellow-600",
+      LOW: "bg-green-600",
+    };
+    return colors[severity] || "bg-gray-600";
+  };
 
-  // Panel de notifications
+  // ✅ Calcul des vulnérabilités depuis les résultats stockés
+  const getVulnerabilitiesFromResults = (scan) => {
+    if (!scan.results || !scan.results.detailed_vulnerabilities) {
+      return { total: 0, critical: 0, high: 0, medium: 0, low: 0 };
+    }
+
+    const vulns = scan.results.detailed_vulnerabilities;
+    return {
+      total: vulns.length,
+      critical: vulns.filter((v) => v.severity === "CRITICAL").length,
+      high: vulns.filter((v) => v.severity === "HIGH").length,
+      medium: vulns.filter((v) => v.severity === "MEDIUM").length,
+      low: vulns.filter((v) => v.severity === "LOW").length,
+    };
+  };
+
+  // Composants UI
+  const StatCard = ({ title, value, icon, color = "blue", subtitle }) => (
+    <div
+      className={`${theme.cardBg} p-6 rounded-lg shadow-sm ${theme.border} border`}
+    >
+      <div className="flex items-center justify-between">
+        <div>
+          <p className={`text-sm font-medium ${theme.textMuted}`}>{title}</p>
+          <p className={`text-3xl font-bold ${theme.text}`}>{value || 0}</p>
+          {subtitle && (
+            <p className={`text-xs ${theme.textMuted} mt-1`}>{subtitle}</p>
+          )}
+        </div>
+        <div className={`text-${color}-500 text-2xl`}>{icon}</div>
+      </div>
+    </div>
+  );
+
   const NotificationPanel = () => (
-    <div style={{
-      position: 'fixed',
-      top: '1rem',
-      right: '1rem',
-      zIndex: 1000,
-      display: showNotifications ? 'block' : 'none',
-      maxWidth: '350px'
-    }}>
-      {notifications.map(notification => (
+    <div
+      className={`fixed top-4 right-4 z-50 space-y-3 ${
+        showNotifications ? "block" : "hidden"
+      }`}
+    >
+      {notifications.map((notification) => (
         <div
           key={notification.id}
-          style={{
-            backgroundColor: theme.cardBg,
-            border: `2px solid ${
-              notification.type === 'success' ? theme.success :
-              notification.type === 'error' ? theme.danger :
-              notification.type === 'warning' ? theme.warning :
-              theme.info
-            }`,
-            color: theme.text,
-            padding: '1rem',
-            borderRadius: '0.5rem',
-            marginBottom: '0.75rem',
-            boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05)',
-            animation: 'slideInRight 0.3s ease-out',
-            position: 'relative'
-          }}
+          className={`${
+            theme.cardBg
+          } border-l-4 p-4 rounded-lg shadow-lg max-w-sm ${
+            notification.type === "success"
+              ? "border-green-500"
+              : notification.type === "error"
+              ? "border-red-500"
+              : notification.type === "warning"
+              ? "border-yellow-500"
+              : "border-blue-500"
+          }`}
         >
-          <div style={{ 
-            fontSize: '0.875rem', 
-            fontWeight: '500',
-            marginBottom: '0.25rem'
-          }}>
-            {notification.type === 'success' && '✅ '}
-            {notification.type === 'error' && '❌ '}
-            {notification.type === 'warning' && '⚠️ '}
-            {notification.type === 'info' && 'ℹ️ '}
-            {notification.message}
+          <div className="flex items-start">
+            <div className="flex-shrink-0">
+              {notification.type === "success" && (
+                <CheckCircle className="w-5 h-5 text-green-500" />
+              )}
+              {notification.type === "error" && (
+                <XCircle className="w-5 h-5 text-red-500" />
+              )}
+              {notification.type === "warning" && (
+                <AlertTriangle className="w-5 h-5 text-yellow-500" />
+              )}
+              {notification.type === "info" && (
+                <Info className="w-5 h-5 text-blue-500" />
+              )}
+            </div>
+            <div className="ml-3 flex-1">
+              <p className={`text-sm font-medium ${theme.text}`}>
+                {notification.message}
+              </p>
+              <p className={`text-xs ${theme.textMuted} mt-1`}>
+                {notification.timestamp.toLocaleTimeString("fr-FR")}
+              </p>
+            </div>
+            <button
+              onClick={() =>
+                setNotifications((prev) =>
+                  prev.filter((n) => n.id !== notification.id)
+                )
+              }
+              className={`ml-3 ${theme.textMuted} hover:text-gray-900`}
+            >
+              <X className="w-4 h-4" />
+            </button>
           </div>
-          <div style={{ 
-            fontSize: '0.75rem', 
-            color: theme.textMuted 
-          }}>
-            {notification.timestamp.toLocaleTimeString('fr-FR')}
-          </div>
-          
-          <button
-            onClick={() => setNotifications(prev => prev.filter(n => n.id !== notification.id))}
-            style={{
-              position: 'absolute',
-              top: '0.5rem',
-              right: '0.5rem',
-              background: 'none',
-              border: 'none',
-              color: theme.textMuted,
-              cursor: 'pointer',
-              fontSize: '1rem',
-              padding: '0.25rem'
-            }}
-          >
-            ✕
-          </button>
         </div>
       ))}
     </div>
   );
 
-  // Composant statut scan
-  const ScanStatus = ({ scan }) => {
-    const getStatusConfig = (status) => {
-      switch (status) {
-        case 'pending': 
-          return { color: theme.warning, icon: '⏳', label: 'En attente' };
-        case 'running': 
-          return { color: theme.primary, icon: '🔄', label: 'En cours' };
-        case 'completed': 
-          return { color: theme.success, icon: '✅', label: 'Terminé' };
-        case 'failed': 
-          return { color: theme.danger, icon: '❌', label: 'Échoué' };
-        default: 
-          return { color: theme.textMuted, icon: '❓', label: 'Inconnu' };
-      }
-    };
+  const ScanForm = () => (
+    <div
+      className={`${theme.cardBg} p-6 rounded-lg shadow-sm ${theme.border} border`}
+    >
+      <h2 className={`text-xl font-bold ${theme.text} mb-6 flex items-center`}>
+        <Shield className="w-6 h-6 mr-2" />
+        Nouveau scan de sécurité
+      </h2>
 
-    const statusConfig = getStatusConfig(scan.status);
-    const duration = scan.completed_at ? 
-      Math.round((new Date(scan.completed_at) - new Date(scan.start_time)) / 1000) : 
-      Math.round((Date.now() - new Date(scan.start_time)) / 1000);
-
-    return (
-      <div style={{
-        backgroundColor: theme.cardBg,
-        color: theme.text,
-        padding: '2rem',
-        borderRadius: '0.75rem',
-        boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
-        marginBottom: '2rem',
-        border: `2px solid ${statusConfig.color}20`,
-        position: 'relative',
-        overflow: 'hidden'
-      }}>
-        <div style={{
-          display: 'flex',
-          alignItems: 'flex-start',
-          gap: '1.5rem',
-          marginBottom: '1.5rem'
-        }}>
-          <div style={{
-            fontSize: '2.5rem',
-            animation: scan.status === 'running' ? 'spin 2s linear infinite' : 'none'
-          }}>
-            {statusConfig.icon}
+      <form onSubmit={handleScan} className="space-y-4">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+          <div className="lg:col-span-8">
+            <label className={`block text-sm font-medium ${theme.text} mb-2`}>
+              URL du dépôt GitHub
+            </label>
+            <input
+              type="url"
+              value={githubUrl}
+              onChange={(e) => setGithubUrl(e.target.value)}
+              placeholder="https://github.com/username/repository"
+              disabled={loading}
+              className={`w-full px-4 py-3 ${theme.cardBg} ${
+                theme.border
+              } border rounded-lg ${
+                theme.text
+              } focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors ${
+                error ? "border-red-500" : ""
+              }`}
+            />
           </div>
-          
-          <div style={{ flex: 1 }}>
-            <h3 style={{ margin: '0 0 0.5rem 0', color: theme.text, fontSize: '1.5rem' }}>
-              Scan {statusConfig.label}
-            </h3>
-            <p style={{ margin: '0 0 0.75rem 0', color: theme.text, fontSize: '1.1rem', fontWeight: '500' }}>
-              📦 {scan.repository}
-            </p>
-            <div style={{
-              display: 'flex',
-              flexWrap: 'wrap',
-              gap: '1rem',
-              color: theme.textMuted,
-              fontSize: '0.875rem'
-            }}>
-              <span>⏰ Démarré: {new Date(scan.start_time).toLocaleString('fr-FR')}</span>
-              <span>⏱️ Durée: {duration}s</span>
-              {scan.files_scanned && (
-                <span>📁 Fichiers: {scan.files_scanned}</span>
-              )}
-            </div>
-          </div>
-        </div>
 
-        <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '1rem',
-          flexWrap: 'wrap'
-        }}>
-          <span style={{
-            padding: '0.5rem 1rem',
-            backgroundColor: statusConfig.color,
-            color: 'white',
-            borderRadius: '2rem',
-            fontSize: '0.875rem',
-            textTransform: 'uppercase',
-            fontWeight: 'bold',
-            letterSpacing: '0.05em'
-          }}>
-            {statusConfig.label}
-          </span>
-          
-          {scan.status === 'running' && (
-            <span style={{
-              color: theme.textMuted,
-              fontSize: '0.875rem',
-              fontStyle: 'italic'
-            }}>
-              🔍 Analyse en cours...
-            </span>
-          )}
-          
-          {scan.error_message && (
-            <span style={{
-              color: theme.danger,
-              fontSize: '0.875rem',
-              backgroundColor: theme.danger + '20',
-              padding: '0.25rem 0.75rem',
-              borderRadius: '0.25rem'
-            }}>
-              ❌ {scan.error_message}
-            </span>
-          )}
-        </div>
-      </div>
-    );
-  };
-
-  // Composant résultats
-  const ScanResults = ({ scan }) => {
-    if (!scan.results) return null;
-
-    let results;
-    try {
-      results = typeof scan.results === 'string' ? JSON.parse(scan.results) : scan.results;
-    } catch (e) {
-      console.error('Erreur parsing résultats:', e);
-      return null;
-    }
-
-    const totalVulns = (results.critical || 0) + 
-                      (results.high || 0) + 
-                      (results.medium || 0) +
-                      (results.low || 0);
-
-    const vulnData = [
-      { key: 'critical', label: 'Critiques', color: '#dc2626', count: results.critical || 0 },
-      { key: 'high', label: 'Élevées', color: '#ea580c', count: results.high || 0 },
-      { key: 'medium', label: 'Moyennes', color: '#d97706', count: results.medium || 0 },
-      { key: 'low', label: 'Faibles', color: '#65a30d', count: results.low || 0 }
-    ];
-
-    return (
-      <div style={{
-        backgroundColor: theme.cardBg,
-        color: theme.text,
-        padding: '2rem',
-        borderRadius: '0.75rem',
-        boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
-        border: `2px solid ${totalVulns > 0 ? theme.danger : theme.success}40`,
-        marginBottom: '2rem'
-      }}>
-        <div style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'flex-start',
-          marginBottom: '2rem',
-          flexWrap: 'wrap',
-          gap: '1rem'
-        }}>
-          <div>
-            <h3 style={{ margin: '0 0 0.5rem 0', color: theme.text, fontSize: '1.5rem' }}>
-              📊 Résultats du scan
-            </h3>
-            <p style={{ margin: 0, color: theme.textMuted }}>
-              Analyse complète de {scan.repository}
-            </p>
-          </div>
-          
-          <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
-            <div style={{
-              textAlign: 'center',
-              padding: '1rem',
-              backgroundColor: totalVulns > 0 ? theme.danger + '20' : theme.success + '20',
-              borderRadius: '0.75rem',
-              border: `2px solid ${totalVulns > 0 ? theme.danger : theme.success}40`
-            }}>
-              <div style={{
-                fontSize: '2rem',
-                fontWeight: 'bold',
-                color: totalVulns > 0 ? theme.danger : theme.success,
-                margin: '0 0 0.25rem 0'
-              }}>
-                {totalVulns}
-              </div>
-              <div style={{
-                fontSize: '0.875rem',
-                color: theme.textMuted,
-                fontWeight: '500'
-              }}>
-                Vulnérabilité{totalVulns !== 1 ? 's' : ''}
-              </div>
-            </div>
-            
-            <button
-              onClick={() => setSelectedScan(scan)}
-              style={{
-                padding: '0.75rem 1.5rem',
-                backgroundColor: theme.primary,
-                color: 'white',
-                border: 'none',
-                borderRadius: '0.5rem',
-                cursor: 'pointer',
-                fontSize: '0.875rem',
-                fontWeight: '500',
-                transition: 'all 0.2s',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.5rem'
-              }}
+          <div className="lg:col-span-2">
+            <label className={`block text-sm font-medium ${theme.text} mb-2`}>
+              Profondeur
+            </label>
+            <select
+              value={scanDepth}
+              onChange={(e) => setScanDepth(e.target.value)}
+              disabled={loading}
+              className={`w-full px-4 py-3 ${theme.cardBg} ${theme.border} border rounded-lg ${theme.text} focus:outline-none focus:ring-2 focus:ring-blue-500`}
             >
-              🔍 Voir détails
+              <option value="standard">Standard</option>
+              <option value="deep">Approfondi</option>
+              <option value="quick">Rapide</option>
+            </select>
+          </div>
+
+          <div className="lg:col-span-2 flex items-end">
+            <button
+              type="submit"
+              disabled={loading || !githubUrl.trim()}
+              className={`w-full px-6 py-3 rounded-lg font-medium transition-all duration-200 ${
+                loading || !githubUrl.trim()
+                  ? "bg-gray-400 cursor-not-allowed"
+                  : "bg-blue-600 hover:bg-blue-700"
+              } text-white flex items-center justify-center`}
+            >
+              {loading ? (
+                <>
+                  <div className="animate-spin mr-2 w-4 h-4 border-2 border-white border-t-transparent rounded-full"></div>
+                  Analyse...
+                </>
+              ) : (
+                <>
+                  <Shield className="w-4 h-4 mr-2" />
+                  Scanner
+                </>
+              )}
             </button>
           </div>
         </div>
 
-        {/* Grille des vulnérabilités */}
-        <div style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
-          gap: '1rem',
-          marginBottom: '2rem'
-        }}>
-          {vulnData.map(({ key, label, color, count }) => (
-            <div 
-              key={key}
-              style={{
-                backgroundColor: count > 0 ? `${color}20` : (darkMode ? '#374151' : '#f9fafb'),
-                padding: '1.5rem',
-                borderRadius: '0.75rem',
-                textAlign: 'center',
-                border: `2px solid ${color}30`,
-                transition: 'all 0.2s',
-                cursor: count > 0 ? 'pointer' : 'default'
-              }}
-              onClick={() => count > 0 && setSelectedScan(scan)}
-            >
-              <div style={{ 
-                fontSize: '2rem', 
-                fontWeight: 'bold', 
-                color: color,
-                marginBottom: '0.5rem'
-              }}>
-                {count}
-              </div>
-              <div style={{ 
-                fontSize: '0.875rem', 
-                color: theme.textMuted,
-                fontWeight: '600',
-                textTransform: 'uppercase',
-                letterSpacing: '0.05em'
-              }}>
-                {label}
-              </div>
-            </div>
-          ))}
-        </div>
-
-        {/* Graphique en barres */}
-        {totalVulns > 0 && (
-          <div>
-            <h4 style={{ 
-              margin: '0 0 1rem 0', 
-              color: theme.text, 
-              fontSize: '1.1rem',
-              fontWeight: '600'
-            }}>
-              📈 Répartition des vulnérabilités
-            </h4>
-            <div style={{ 
-              display: 'flex', 
-              height: '12px', 
-              backgroundColor: darkMode ? '#374151' : '#f3f4f6', 
-              borderRadius: '0.5rem', 
-              overflow: 'hidden',
-              border: `1px solid ${theme.border}`
-            }}>
-              {vulnData.map(({ key, color, count }) => {
-                const percentage = totalVulns > 0 ? (count / totalVulns) * 100 : 0;
-                return percentage > 0 ? (
-                  <div
-                    key={key}
-                    style={{
-                      backgroundColor: color,
-                      width: `${percentage}%`,
-                      height: '100%',
-                      transition: 'all 0.3s ease'
-                    }}
-                    title={`${key}: ${count} (${percentage.toFixed(1)}%)`}
-                  />
-                ) : null;
-              })}
-            </div>
-            
-            {/* Légende */}
-            <div style={{
-              display: 'flex',
-              justifyContent: 'center',
-              gap: '1rem',
-              marginTop: '1rem',
-              flexWrap: 'wrap'
-            }}>
-              {vulnData.filter(({ count }) => count > 0).map(({ key, label, color, count }) => (
-                <div key={key} style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.5rem',
-                  fontSize: '0.75rem',
-                  color: theme.text
-                }}>
-                  <div style={{
-                    width: '0.75rem',
-                    height: '0.75rem',
-                    backgroundColor: color,
-                    borderRadius: '50%'
-                  }} />
-                  <span>{label}: {count}</span>
-                </div>
-              ))}
+        {error && (
+          <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+            <div className="flex items-center">
+              <XCircle className="w-5 h-5 text-red-500 mr-2" />
+              <p className="text-sm text-red-700">{error}</p>
             </div>
           </div>
         )}
+      </form>
+    </div>
+  );
 
-        {/* Informations supplémentaires */}
-        <div style={{
-          marginTop: '2rem',
-          paddingTop: '2rem',
-          borderTop: `1px solid ${theme.border}`,
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-          gap: '1rem',
-          fontSize: '0.875rem',
-          color: theme.textMuted
-        }}>
-          <div>
-            <strong>📁 Fichiers analysés:</strong> {results.files_scanned || 'N/A'}
+  // ✅ Composant de statut de scan amélioré
+  const CurrentScanStatus = () => {
+    if (!currentScan) return null;
+
+    const duration = currentScan.completed_at
+      ? Math.round(
+          (new Date(currentScan.completed_at) -
+            new Date(currentScan.start_time)) /
+            1000
+        )
+      : Math.round((Date.now() - new Date(currentScan.start_time)) / 1000);
+
+    const vulnCounts = getVulnerabilitiesFromResults(currentScan);
+
+    return (
+      <div
+        className={`${theme.cardBg} p-6 rounded-lg shadow-sm ${theme.border} border`}
+      >
+        <div className="flex items-start justify-between mb-4">
+          <div className="flex items-center">
+            {getStatusIcon(currentScan.status)}
+            <div className="ml-3">
+              <h3 className={`text-lg font-semibold ${theme.text}`}>
+                Scan {getStatusLabel(currentScan.status)}
+              </h3>
+              <p className={`${theme.textMuted}`}>
+                📦 {currentScan.repository}
+              </p>
+            </div>
           </div>
-          <div>
-            <strong>⏱️ Durée du scan:</strong> {scan.completed_at ? 
-              Math.round((new Date(scan.completed_at) - new Date(scan.start_time)) / 1000) + 's' : 
-              'En cours'
-            }
-          </div>
-          <div>
-            <strong>📅 Date:</strong> {new Date(scan.start_time).toLocaleString('fr-FR')}
-          </div>
-          <div>
-            <strong>🔍 Profondeur:</strong> {scan.scan_depth || 'Standard'}
+
+          <div
+            className={`px-3 py-1 rounded-full text-xs font-medium ${
+              currentScan.status === "completed"
+                ? "bg-green-100 text-green-800"
+                : currentScan.status === "running"
+                ? "bg-blue-100 text-blue-800"
+                : currentScan.status === "failed"
+                ? "bg-red-100 text-red-800"
+                : "bg-yellow-100 text-yellow-800"
+            }`}
+          >
+            {getStatusLabel(currentScan.status)}
           </div>
         </div>
+
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div>
+            <p className={`text-sm ${theme.textMuted}`}>Démarré</p>
+            <p className={`font-medium ${theme.text}`}>
+              {new Date(currentScan.start_time).toLocaleString("fr-FR")}
+            </p>
+          </div>
+          <div>
+            <p className={`text-sm ${theme.textMuted}`}>Durée</p>
+            <p className={`font-medium ${theme.text}`}>{duration}s</p>
+          </div>
+          {currentScan.files_scanned && (
+            <div>
+              <p className={`text-sm ${theme.textMuted}`}>Fichiers</p>
+              <p className={`font-medium ${theme.text}`}>
+                {currentScan.files_scanned}
+              </p>
+            </div>
+          )}
+          {currentScan.status === "completed" && (
+            <div>
+              <p className={`text-sm ${theme.textMuted}`}>Vulnérabilités</p>
+              <p className={`font-medium ${theme.text}`}>{vulnCounts.total}</p>
+            </div>
+          )}
+        </div>
+
+        {currentScan.status === "running" && (
+          <div className="mt-4">
+            <div className="bg-gray-200 rounded-full h-2">
+              <div
+                className="bg-blue-600 h-2 rounded-full animate-pulse"
+                style={{ width: "60%" }}
+              ></div>
+            </div>
+            <p className={`text-sm ${theme.textMuted} mt-2`}>
+              🔍 Analyse en cours...
+            </p>
+          </div>
+        )}
+
+        {/* ✅ Affichage des résultats de vulnérabilités */}
+        {currentScan.status === "completed" && vulnCounts.total > 0 && (
+          <div className="mt-4 pt-4 border-t border-gray-200">
+            <div className="flex items-center justify-between mb-3">
+              <h4 className={`font-semibold ${theme.text}`}>
+                Vulnérabilités détectées
+              </h4>
+              <div className="flex space-x-2">
+                <button
+                  onClick={() => setSelectedVulnerabilities(currentScan)}
+                  className="px-3 py-1 bg-blue-600 text-white rounded text-sm hover:bg-blue-700"
+                >
+                  <Eye className="w-4 h-4 inline mr-1" />
+                  Détails
+                </button>
+                <button
+                  onClick={() =>
+                    apiService.exportVulnerabilities(currentScan.id)
+                  }
+                  className="px-3 py-1 bg-green-600 text-white rounded text-sm hover:bg-green-700"
+                >
+                  <Download className="w-4 h-4 inline mr-1" />
+                  CSV
+                </button>
+              </div>
+            </div>
+            <div className="grid grid-cols-4 gap-2">
+              {vulnCounts.critical > 0 && (
+                <div className="bg-red-600 text-white text-center py-2 rounded text-sm">
+                  <div className="font-bold">{vulnCounts.critical}</div>
+                  <div>Critiques</div>
+                </div>
+              )}
+              {vulnCounts.high > 0 && (
+                <div className="bg-orange-600 text-white text-center py-2 rounded text-sm">
+                  <div className="font-bold">{vulnCounts.high}</div>
+                  <div>Élevées</div>
+                </div>
+              )}
+              {vulnCounts.medium > 0 && (
+                <div className="bg-yellow-600 text-white text-center py-2 rounded text-sm">
+                  <div className="font-bold">{vulnCounts.medium}</div>
+                  <div>Moyennes</div>
+                </div>
+              )}
+              {vulnCounts.low > 0 && (
+                <div className="bg-green-600 text-white text-center py-2 rounded text-sm">
+                  <div className="font-bold">{vulnCounts.low}</div>
+                  <div>Faibles</div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     );
   };
 
-  // Composant historique des scans
-  const ScanHistory = () => (
-    <div style={{
-      backgroundColor: theme.cardBg,
-      color: theme.text,
-      padding: '2rem',
-      borderRadius: '0.75rem',
-      boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
-      marginBottom: '2rem'
-    }}>
-      <div style={{
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        marginBottom: '2rem',
-        flexWrap: 'wrap',
-        gap: '1rem'
-      }}>
-        <h3 style={{ margin: 0, fontSize: '1.5rem' }}>📋 Historique des scans</h3>
-        
-        <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
-          {/* Filtres */}
-          <select
-            value={filterStatus}
-            onChange={(e) => setFilterStatus(e.target.value)}
-            style={{
-              padding: '0.5rem 1rem',
-              backgroundColor: theme.cardBg,
-              border: `1px solid ${theme.border}`,
-              borderRadius: '0.5rem',
-              color: theme.text,
-              fontSize: '0.875rem'
-            }}
-          >
-            <option value="all">Tous les statuts</option>
-            <option value="completed">✅ Terminés</option>
-            <option value="running">🔄 En cours</option>
-            <option value="failed">❌ Échoués</option>
-            <option value="pending">⏳ En attente</option>
-          </select>
+  // ✅ Table d'historique mise à jour
+  const ScanHistoryTable = () => (
+    <div
+      className={`${theme.cardBg} rounded-lg shadow-sm ${theme.border} border`}
+    >
+      <div className="p-6 border-b border-gray-200">
+        <div className="flex items-center justify-between">
+          <h3 className={`text-lg font-semibold ${theme.text}`}>
+            Historique des scans
+          </h3>
 
-          {/* Barre de recherche */}
-          <input
-            type="text"
-            placeholder="🔍 Rechercher un dépôt..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            style={{
-              padding: '0.5rem 1rem',
-              backgroundColor: theme.cardBg,
-              border: `1px solid ${theme.border}`,
-              borderRadius: '0.5rem',
-              color: theme.text,
-              fontSize: '0.875rem',
-              minWidth: '200px'
-            }}
-          />
+          <div className="flex space-x-3">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
+              <input
+                type="text"
+                placeholder="Rechercher..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className={`pl-10 pr-4 py-2 ${theme.cardBg} ${theme.border} border rounded-lg ${theme.text} focus:outline-none focus:ring-2 focus:ring-blue-500 w-64`}
+              />
+            </div>
+
+            <select
+              value={filterStatus}
+              onChange={(e) => setFilterStatus(e.target.value)}
+              className={`px-4 py-2 ${theme.cardBg} ${theme.border} border rounded-lg ${theme.text} focus:outline-none focus:ring-2 focus:ring-blue-500`}
+            >
+              <option value="all">Tous les statuts</option>
+              <option value="completed">Terminés</option>
+              <option value="running">En cours</option>
+              <option value="failed">Échoués</option>
+              <option value="pending">En attente</option>
+            </select>
+          </div>
         </div>
       </div>
 
-      {/* Liste des scans */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+      <div className="overflow-x-auto">
         {filteredScans.length === 0 ? (
-          <div style={{
-            textAlign: 'center',
-            color: theme.textMuted,
-            padding: '3rem',
-            fontSize: '1.1rem'
-          }}>
-            {searchTerm || filterStatus !== 'all' ? 
-              '🔍 Aucun scan ne correspond à vos critères' : 
-              '📝 Aucun scan enregistré pour le moment'
-            }
+          <div className="p-12 text-center">
+            <div className={`text-6xl mb-4 ${theme.textMuted}`}>📊</div>
+            <p className={`text-lg ${theme.textMuted}`}>
+              {searchTerm || filterStatus !== "all"
+                ? "Aucun scan ne correspond à vos critères"
+                : "Aucun scan enregistré pour le moment"}
+            </p>
           </div>
         ) : (
-          filteredScans.map(scan => (
-            <div
-              key={scan.id}
-              style={{
-                backgroundColor: darkMode ? '#2a2a4a' : '#f8f9fa',
-                border: `1px solid ${theme.border}`,
-                borderRadius: '0.5rem',
-                padding: '1.5rem',
-                transition: 'all 0.2s',
-                cursor: 'pointer'
-              }}
-              onClick={() => setSelectedScan(scan)}
-              onMouseOver={(e) => e.target.style.transform = 'translateY(-2px)'}
-              onMouseOut={(e) => e.target.style.transform = 'translateY(0)'}
-            >
-              <div style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'flex-start',
-                gap: '1rem',
-                flexWrap: 'wrap'
-              }}>
-                <div style={{ flex: 1, minWidth: '300px' }}>
-                  <h4 style={{ 
-                    margin: '0 0 0.5rem 0', 
-                    fontSize: '1.1rem',
-                    color: theme.text 
-                  }}>
-                    📦 {scan.repository}
-                  </h4>
-                  
-                  <div style={{
-                    display: 'flex',
-                    gap: '1rem',
-                    marginBottom: '0.75rem',
-                    flexWrap: 'wrap',
-                    fontSize: '0.875rem',
-                    color: theme.textMuted
-                  }}>
-                    <span>📅 {new Date(scan.start_time).toLocaleString('fr-FR')}</span>
-                    {scan.completed_at && (
-                      <span>⏱️ {Math.round((new Date(scan.completed_at) - new Date(scan.start_time)) / 1000)}s</span>
-                    )}
-                    {scan.files_scanned && (
-                      <span>📁 {scan.files_scanned} fichiers</span>
-                    )}
-                  </div>
+          <table className="min-w-full">
+            <thead className={`bg-gray-50 ${darkMode ? "bg-gray-700" : ""}`}>
+              <tr>
+                <th
+                  className={`px-6 py-3 text-left text-xs font-medium ${theme.textMuted} uppercase tracking-wider`}
+                >
+                  Dépôt
+                </th>
+                <th
+                  className={`px-6 py-3 text-left text-xs font-medium ${theme.textMuted} uppercase tracking-wider`}
+                >
+                  Statut
+                </th>
+                <th
+                  className={`px-6 py-3 text-left text-xs font-medium ${theme.textMuted} uppercase tracking-wider`}
+                >
+                  Vulnérabilités
+                </th>
+                <th
+                  className={`px-6 py-3 text-left text-xs font-medium ${theme.textMuted} uppercase tracking-wider`}
+                >
+                  Date
+                </th>
+                <th
+                  className={`px-6 py-3 text-left text-xs font-medium ${theme.textMuted} uppercase tracking-wider`}
+                >
+                  Durée
+                </th>
+                <th
+                  className={`px-6 py-3 text-right text-xs font-medium ${theme.textMuted} uppercase tracking-wider`}
+                >
+                  Actions
+                </th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-200">
+              {filteredScans.map((scan) => {
+                const vulnCounts = getVulnerabilitiesFromResults(scan);
+                const duration = scan.completed_at
+                  ? Math.round(
+                      (new Date(scan.completed_at) -
+                        new Date(scan.start_time)) /
+                        1000
+                    )
+                  : null;
 
-                  {/* Résultats rapides */}
-                  {scan.results && (() => {
-                    try {
-                      const results = typeof scan.results === 'string' ? JSON.parse(scan.results) : scan.results;
-                      const totalVulns = (results.critical || 0) + (results.high || 0) + (results.medium || 0) + (results.low || 0);
-                      
-                      return (
-                        <div style={{
-                          display: 'flex',
-                          gap: '0.5rem',
-                          alignItems: 'center',
-                          flexWrap: 'wrap'
-                        }}>
-                          <span style={{ fontSize: '0.875rem', color: theme.textMuted }}>
-                            🔍 {totalVulns} vulnérabilité{totalVulns !== 1 ? 's' : ''}:
-                          </span>
-                          {results.critical > 0 && (
-                            <span style={{
-                              padding: '0.25rem 0.5rem',
-                              backgroundColor: '#dc2626',
-                              color: 'white',
-                              borderRadius: '0.25rem',
-                              fontSize: '0.75rem',
-                              fontWeight: 'bold'
-                            }}>
-                              {results.critical} critique{results.critical > 1 ? 's' : ''}
+                return (
+                  <tr
+                    key={scan.id}
+                    className={`hover:${
+                      darkMode ? "bg-gray-700" : "bg-gray-50"
+                    } transition-colors cursor-pointer`}
+                    onClick={() => setSelectedScan(scan)}
+                  >
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <div className="flex items-center">
+                        <div className="flex-shrink-0">
+                          <div className="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center">
+                            <Shield className="w-5 h-5 text-blue-600" />
+                          </div>
+                        </div>
+                        <div className="ml-4">
+                          <div className={`text-sm font-medium ${theme.text}`}>
+                            {scan.repository}
+                          </div>
+                          <div className={`text-sm ${theme.textMuted}`}>
+                            {scan.files_scanned
+                              ? `${scan.files_scanned} fichiers`
+                              : "En cours..."}
+                          </div>
+                        </div>
+                      </div>
+                    </td>
+
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <div className="flex items-center">
+                        {getStatusIcon(scan.status)}
+                        <span
+                          className={`ml-2 px-2 py-1 text-xs font-semibold rounded-full ${
+                            scan.status === "completed"
+                              ? "bg-green-100 text-green-800"
+                              : scan.status === "running"
+                              ? "bg-blue-100 text-blue-800"
+                              : scan.status === "failed"
+                              ? "bg-red-100 text-red-800"
+                              : "bg-yellow-100 text-yellow-800"
+                          }`}
+                        >
+                          {getStatusLabel(scan.status)}
+                        </span>
+                      </div>
+                    </td>
+
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      {scan.status === "completed" ? (
+                        <div className="flex items-center space-x-2">
+                          <div
+                            className={`text-lg font-bold ${
+                              vulnCounts.total === 0
+                                ? "text-green-600"
+                                : vulnCounts.critical > 0
+                                ? "text-red-600"
+                                : vulnCounts.high > 0
+                                ? "text-orange-600"
+                                : "text-yellow-600"
+                            }`}
+                          >
+                            {vulnCounts.total}
+                          </div>
+                          {vulnCounts.critical > 0 && (
+                            <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-red-100 text-red-800">
+                              {vulnCounts.critical} critique
+                              {vulnCounts.critical > 1 ? "s" : ""}
                             </span>
                           )}
-                          {results.high > 0 && (
-                            <span style={{
-                              padding: '0.25rem 0.5rem',
-                              backgroundColor: '#ea580c',
-                              color: 'white',
-                              borderRadius: '0.25rem',
-                              fontSize: '0.75rem',
-                              fontWeight: 'bold'
-                            }}>
-                              {results.high} élevée{results.high > 1 ? 's' : ''}
-                            </span>
-                          )}
-                          {results.medium > 0 && (
-                            <span style={{
-                              padding: '0.25rem 0.5rem',
-                              backgroundColor: '#d97706',
-                              color: 'white',
-                              borderRadius: '0.25rem',
-                              fontSize: '0.75rem',
-                              fontWeight: 'bold'
-                            }}>
-                              {results.medium} moyenne{results.medium > 1 ? 's' : ''}
-                            </span>
-                          )}
-                          {results.low > 0 && (
-                            <span style={{
-                              padding: '0.25rem 0.5rem',
-                              backgroundColor: '#65a30d',
-                              color: 'white',
-                              borderRadius: '0.25rem',
-                              fontSize: '0.75rem',
-                              fontWeight: 'bold'
-                            }}>
-                              {results.low} faible{results.low > 1 ? 's' : ''}
+                          {vulnCounts.high > 0 && (
+                            <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-orange-100 text-orange-800">
+                              {vulnCounts.high} élevée
+                              {vulnCounts.high > 1 ? "s" : ""}
                             </span>
                           )}
                         </div>
-                      );
-                    } catch (e) {
-                      return null;
-                    }
-                  })()}
-                </div>
+                      ) : (
+                        <span className={`text-sm ${theme.textMuted}`}>
+                          {scan.status === "running" ? "En analyse..." : "-"}
+                        </span>
+                      )}
+                    </td>
 
-                <div style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '1rem'
-                }}>
-                  {/* Statut */}
-                  <span style={{
-                    padding: '0.5rem 1rem',
-                    backgroundColor: (() => {
-                      switch (scan.status) {
-                        case 'completed': return theme.success;
-                        case 'running': return theme.primary;
-                        case 'failed': return theme.danger;
-                        case 'pending': return theme.warning;
-                        default: return theme.textMuted;
-                      }
-                    })(),
-                    color: 'white',
-                    borderRadius: '2rem',
-                    fontSize: '0.75rem',
-                    fontWeight: 'bold',
-                    textTransform: 'uppercase',
-                    letterSpacing: '0.05em'
-                  }}>
-                    {(() => {
-                      switch (scan.status) {
-                        case 'completed': return '✅ Terminé';
-                        case 'running': return '🔄 En cours';
-                        case 'failed': return '❌ Échoué';
-                        case 'pending': return '⏳ En attente';
-                        default: return '❓ Inconnu';
-                      }
-                    })()}
-                  </span>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <div className={`text-sm ${theme.text}`}>
+                        {new Date(scan.start_time).toLocaleDateString("fr-FR")}
+                      </div>
+                      <div className={`text-sm ${theme.textMuted}`}>
+                        {new Date(scan.start_time).toLocaleTimeString("fr-FR")}
+                      </div>
+                    </td>
 
-                  {/* Actions */}
-                  <div style={{ display: 'flex', gap: '0.5rem' }}>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        rerunScan(scan);
-                      }}
-                      style={{
-                        padding: '0.5rem',
-                        backgroundColor: 'transparent',
-                        border: `1px solid ${theme.primary}`,
-                        color: theme.primary,
-                        borderRadius: '0.25rem',
-                        cursor: 'pointer',
-                        fontSize: '0.875rem',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '0.25rem'
-                      }}
-                      title="Relancer le scan"
-                    >
-                      🔄
-                    </button>
-                    
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setShowDeleteConfirm(scan.id);
-                      }}
-                      disabled={deletingScans.has(scan.id)}
-                      style={{
-                        padding: '0.5rem',
-                        backgroundColor: 'transparent',
-                        border: `1px solid ${theme.danger}`,
-                        color: theme.danger,
-                        borderRadius: '0.25rem',
-                        cursor: deletingScans.has(scan.id) ? 'not-allowed' : 'pointer',
-                        fontSize: '0.875rem',
-                        opacity: deletingScans.has(scan.id) ? 0.5 : 1
-                      }}
-                      title="Supprimer le scan"
-                    >
-                      {deletingScans.has(scan.id) ? '⏳' : '🗑️'}
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          ))
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <span className={`text-sm ${theme.text}`}>
+                        {duration ? `${duration}s` : "-"}
+                      </span>
+                    </td>
+
+                    <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                      <div className="flex items-center justify-end space-x-2">
+                        {scan.status === "completed" &&
+                          vulnCounts.total > 0 && (
+                            <>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSelectedVulnerabilities(scan);
+                                }}
+                                className="text-blue-600 hover:text-blue-900 transition-colors"
+                                title="Voir les vulnérabilités"
+                              >
+                                <Eye className="w-4 h-4" />
+                              </button>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  apiService.exportVulnerabilities(scan.id);
+                                }}
+                                className="text-green-600 hover:text-green-900 transition-colors"
+                                title="Exporter en CSV"
+                              >
+                                <Download className="w-4 h-4" />
+                              </button>
+                            </>
+                          )}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const repoUrl =
+                              scan.github_url ||
+                              `https://github.com/${scan.repository}`;
+                            setGithubUrl(repoUrl);
+                            setScanDepth("standard");
+                            window.scrollTo({ top: 0, behavior: "smooth" });
+                            addNotification(
+                              `URL copiée: ${scan.repository}`,
+                              "info"
+                            );
+                          }}
+                          className="text-indigo-600 hover:text-indigo-900 transition-colors"
+                          title="Relancer le scan"
+                        >
+                          <RotateCcw className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         )}
       </div>
     </div>
   );
 
-  // Modal de détails du scan
-  const ScanDetailsModal = ({ scan, onClose }) => {
-    if (!scan) return null;
+  // Modal de détails d'un scan
+  const ScanDetailsModal = () => {
+    if (!selectedScan) return null;
 
-    let results = null;
-    try {
-      results = scan.results ? (typeof scan.results === 'string' ? JSON.parse(scan.results) : scan.results) : null;
-    } catch (e) {
-      console.error('Erreur parsing résultats:', e);
-    }
+    const vulnCounts = getVulnerabilitiesFromResults(selectedScan);
 
     return (
-      <div style={{
-        position: 'fixed',
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        backgroundColor: 'rgba(0, 0, 0, 0.5)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        zIndex: 1001,
-        backdropFilter: 'blur(4px)',
-        padding: '1rem'
-      }}>
-        <div style={{
-          backgroundColor: theme.cardBg,
-          color: theme.text,
-          padding: '2rem',
-          borderRadius: '0.75rem',
-          maxWidth: '800px',
-          width: '100%',
-          maxHeight: '90vh',
-          overflow: 'auto',
-          boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)',
-          border: `1px solid ${theme.border}`
-        }}>
-          {/* En-tête */}
-          <div style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'flex-start',
-            marginBottom: '2rem',
-            paddingBottom: '1rem',
-            borderBottom: `1px solid ${theme.border}`
-          }}>
-            <div>
-              <h2 style={{ margin: '0 0 0.5rem 0', fontSize: '1.5rem' }}>
-                📦 {scan.repository}
-              </h2>
-              <p style={{ margin: 0, color: theme.textMuted }}>
-                Détails du scan #{scan.id}
-              </p>
-            </div>
-            
-            <button
-              onClick={onClose}
-              style={{
-                background: 'none',
-                border: 'none',
-                color: theme.textMuted,
-                cursor: 'pointer',
-                fontSize: '1.5rem',
-                padding: '0.5rem'
-              }}
-            >
-              ✕
-            </button>
-          </div>
-
-          {/* Informations générales */}
-          <div style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))',
-            gap: '1rem',
-            marginBottom: '2rem',
-            padding: '1.5rem',
-            backgroundColor: darkMode ? '#2a2a4a' : '#f8f9fa',
-            borderRadius: '0.5rem'
-          }}>
-            <div>
-              <strong>📅 Date de début:</strong><br />
-              {new Date(scan.start_time).toLocaleString('fr-FR')}
-            </div>
-            <div>
-              <strong>📅 Date de fin:</strong><br />
-              {scan.completed_at ? new Date(scan.completed_at).toLocaleString('fr-FR') : 'En cours'}
-            </div>
-            <div>
-              <strong>⏱️ Durée:</strong><br />
-              {scan.completed_at ? 
-                Math.round((new Date(scan.completed_at) - new Date(scan.start_time)) / 1000) + 's' : 
-                Math.round((Date.now() - new Date(scan.start_time)) / 1000) + 's'
-              }
-            </div>
-            <div>
-              <strong>🔍 Profondeur:</strong><br />
-              {scan.scan_depth || 'Standard'}
-            </div>
-            <div>
-              <strong>📁 Fichiers analysés:</strong><br />
-              {scan.files_scanned || 'N/A'}
-            </div>
-            <div>
-              <strong>📊 Statut:</strong><br />
-              <span style={{
-                padding: '0.25rem 0.75rem',
-                backgroundColor: (() => {
-                  switch (scan.status) {
-                    case 'completed': return theme.success;
-                    case 'running': return theme.primary;
-                    case 'failed': return theme.danger;
-                    case 'pending': return theme.warning;
-                    default: return theme.textMuted;
-                  }
-                })(),
-                color: 'white',
-                borderRadius: '1rem',
-                fontSize: '0.75rem',
-                fontWeight: 'bold'
-              }}>
-                {(() => {
-                  switch (scan.status) {
-                    case 'completed': return '✅ Terminé';
-                    case 'running': return '🔄 En cours';
-                    case 'failed': return '❌ Échoué';
-                    case 'pending': return '⏳ En attente';
-                    default: return '❓ Inconnu';
-                  }
-                })()}
-              </span>
+      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+        <div
+          className={`${theme.cardBg} rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto`}
+        >
+          <div className="p-6 border-b border-gray-200">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center">
+                <Shield className="w-6 h-6 mr-3 text-blue-600" />
+                <div>
+                  <h2 className={`text-xl font-bold ${theme.text}`}>
+                    {selectedScan.repository}
+                  </h2>
+                  <p className={`${theme.textMuted}`}>
+                    Scan #{selectedScan.id}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setSelectedScan(null)}
+                className={`${theme.textMuted} hover:text-gray-700 transition-colors`}
+              >
+                <X className="w-6 h-6" />
+              </button>
             </div>
           </div>
 
-          {/* Résultats détaillés */}
-          {results && (
-            <div>
-              <h3 style={{ marginBottom: '1rem', fontSize: '1.25rem' }}>
-                🛡️ Résultats de sécurité
-              </h3>
-              
-              {/* Grille des vulnérabilités */}
-              <div style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))',
-                gap: '1rem',
-                marginBottom: '2rem'
-              }}>
-                {[
-                  { key: 'critical', label: 'Critiques', color: '#dc2626', count: results.critical || 0 },
-                  { key: 'high', label: 'Élevées', color: '#ea580c', count: results.high || 0 },
-                  { key: 'medium', label: 'Moyennes', color: '#d97706', count: results.medium || 0 },
-                  { key: 'low', label: 'Faibles', color: '#65a30d', count: results.low || 0 }
-                ].map(({ key, label, color, count }) => (
-                  <div 
-                    key={key}
-                    style={{
-                      backgroundColor: count > 0 ? `${color}20` : (darkMode ? '#374151' : '#f9fafb'),
-                      padding: '1rem',
-                      borderRadius: '0.5rem',
-                      textAlign: 'center',
-                      border: `2px solid ${color}30`
-                    }}
-                  >
-                    <div style={{ 
-                      fontSize: '1.5rem', 
-                      fontWeight: 'bold', 
-                      color: color,
-                      marginBottom: '0.25rem'
-                    }}>
-                      {count}
+          <div className="p-6 space-y-6">
+            {/* Informations générales */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              <div
+                className={`p-4 ${
+                  darkMode ? "bg-gray-700" : "bg-gray-50"
+                } rounded-lg`}
+              >
+                <p className={`text-sm font-medium ${theme.textMuted} mb-1`}>
+                  Statut
+                </p>
+                <div className="flex items-center">
+                  {getStatusIcon(selectedScan.status)}
+                  <span className={`ml-2 font-semibold ${theme.text}`}>
+                    {getStatusLabel(selectedScan.status)}
+                  </span>
+                </div>
+              </div>
+
+              <div
+                className={`p-4 ${
+                  darkMode ? "bg-gray-700" : "bg-gray-50"
+                } rounded-lg`}
+              >
+                <p className={`text-sm font-medium ${theme.textMuted} mb-1`}>
+                  Date de début
+                </p>
+                <p className={`font-semibold ${theme.text}`}>
+                  {new Date(selectedScan.start_time).toLocaleString("fr-FR")}
+                </p>
+              </div>
+
+              {selectedScan.completed_at && (
+                <div
+                  className={`p-4 ${
+                    darkMode ? "bg-gray-700" : "bg-gray-50"
+                  } rounded-lg`}
+                >
+                  <p className={`text-sm font-medium ${theme.textMuted} mb-1`}>
+                    Durée
+                  </p>
+                  <p className={`font-semibold ${theme.text}`}>
+                    {Math.round(
+                      (new Date(selectedScan.completed_at) -
+                        new Date(selectedScan.start_time)) /
+                        1000
+                    )}
+                    s
+                  </p>
+                </div>
+              )}
+
+              {selectedScan.files_scanned && (
+                <div
+                  className={`p-4 ${
+                    darkMode ? "bg-gray-700" : "bg-gray-50"
+                  } rounded-lg`}
+                >
+                  <p className={`text-sm font-medium ${theme.textMuted} mb-1`}>
+                    Fichiers analysés
+                  </p>
+                  <p className={`font-semibold ${theme.text}`}>
+                    {selectedScan.files_scanned}
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {/* Résultats de sécurité */}
+            {selectedScan.status === "completed" && vulnCounts.total >= 0 && (
+              <div>
+                <h3 className={`text-lg font-semibold ${theme.text} mb-4`}>
+                  Résultats de sécurité
+                </h3>
+
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                  {[
+                    {
+                      key: "critical",
+                      label: "Critiques",
+                      count: vulnCounts.critical,
+                      color: "bg-red-600",
+                    },
+                    {
+                      key: "high",
+                      label: "Élevées",
+                      count: vulnCounts.high,
+                      color: "bg-orange-600",
+                    },
+                    {
+                      key: "medium",
+                      label: "Moyennes",
+                      count: vulnCounts.medium,
+                      color: "bg-yellow-600",
+                    },
+                    {
+                      key: "low",
+                      label: "Faibles",
+                      count: vulnCounts.low,
+                      color: "bg-green-600",
+                    },
+                  ].map(({ key, label, count, color }) => (
+                    <div
+                      key={key}
+                      className={`p-4 rounded-lg text-center text-white ${
+                        count > 0 ? color : "bg-gray-400"
+                      }`}
+                    >
+                      <div className="text-2xl font-bold">{count}</div>
+                      <div className="text-sm opacity-90">{label}</div>
                     </div>
-                    <div style={{ 
-                      fontSize: '0.75rem', 
-                      color: theme.textMuted,
-                      fontWeight: '600',
-                      textTransform: 'uppercase'
-                    }}>
-                      {label}
+                  ))}
+                </div>
+
+                <div className="flex space-x-3">
+                  {vulnCounts.total > 0 && (
+                    <>
+                      <button
+                        onClick={() => setSelectedVulnerabilities(selectedScan)}
+                        className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center justify-center"
+                      >
+                        <Eye className="w-4 h-4 mr-2" />
+                        Voir les détails des vulnérabilités ({vulnCounts.total})
+                      </button>
+
+                      <button
+                        onClick={() =>
+                          apiService.exportVulnerabilities(selectedScan.id)
+                        }
+                        className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors flex items-center"
+                      >
+                        <Download className="w-4 h-4 mr-2" />
+                        Export CSV
+                      </button>
+                    </>
+                  )}
+
+                  {vulnCounts.total === 0 && (
+                    <div className="flex-1 text-center py-4">
+                      <Shield className="w-12 h-12 text-green-500 mx-auto mb-2" />
+                      <p className={`font-medium ${theme.text}`}>
+                        Aucune vulnérabilité détectée
+                      </p>
+                      <p className={`text-sm ${theme.textMuted}`}>
+                        Ce dépôt semble sécurisé!
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Message d'erreur */}
+            {selectedScan.error_message && (
+              <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+                <div className="flex items-center">
+                  <XCircle className="w-5 h-5 text-red-500 mr-2" />
+                  <div>
+                    <h4 className="font-medium text-red-800">
+                      Erreur durant l'exécution
+                    </h4>
+                    <p className="text-sm text-red-700 mt-1">
+                      {selectedScan.error_message}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // ✅ Modal des vulnérabilités améliorée pour utiliser les vraies données de la DB
+  const VulnerabilitiesModal = () => {
+    const [vulnerabilities, setVulnerabilities] = useState([]);
+    const [loading, setLoading] = useState(false);
+    const [groupBy, setGroupBy] = useState("severity");
+
+    useEffect(() => {
+      if (selectedVulnerabilities) {
+        setLoading(true);
+        apiService
+          .getScanVulnerabilities(selectedVulnerabilities.id)
+          .then((data) => {
+            console.log("🛡️ Vulnérabilités reçues:", data);
+            setVulnerabilities(data || []);
+          })
+          .catch((error) => {
+            console.error("❌ Erreur récupération vulnérabilités:", error);
+            addNotification(
+              "Erreur lors du chargement des vulnérabilités",
+              "error"
+            );
+          })
+          .finally(() => setLoading(false));
+      }
+    }, [selectedVulnerabilities, addNotification]);
+
+    if (!selectedVulnerabilities) return null;
+
+    const groupedVulnerabilities =
+      vulnerabilities.length > 0
+        ? (() => {
+            if (groupBy === "severity") {
+              return vulnerabilities.reduce((acc, vuln) => {
+                const severity = vuln.severity || "UNKNOWN";
+                if (!acc[severity]) acc[severity] = [];
+                acc[severity].push(vuln);
+                return acc;
+              }, {});
+            } else if (groupBy === "package") {
+              return vulnerabilities.reduce((acc, vuln) => {
+                const pkg = vuln.package_name || "Unknown";
+                if (!acc[pkg]) acc[pkg] = [];
+                acc[pkg].push(vuln);
+                return acc;
+              }, {});
+            }
+            return { Toutes: vulnerabilities };
+          })()
+        : {};
+
+  return (
+      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+        <div className={`${theme.cardBg} rounded-lg shadow-xl max-w-6xl w-full max-h-[90vh] flex flex-col`}>
+          <div className="p-6 border-b border-gray-200">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center">
+                <Bug className="w-6 h-6 mr-3 text-red-600" />
+                <div>
+                  <h2 className={`text-xl font-bold ${theme.text}`}>Vulnérabilités détaillées</h2>
+                  <p className={`${theme.textMuted}`}>
+                    {selectedVulnerabilities.repository} - {vulnerabilities.length} vulnérabilité
+                    {vulnerabilities.length !== 1 ? "s" : ""}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center space-x-3">
+                <select
+                  value={groupBy}
+                  onChange={(e) => setGroupBy(e.target.value)}
+                  className={`px-3 py-2 ${theme.cardBg} ${theme.border} border rounded-lg ${theme.text} text-sm`}
+                >
+                  <option value="severity">Grouper par sévérité</option>
+                  <option value="package">Grouper par package</option>
+                  <option value="none">Sans groupement</option>
+                </select>
+
+                {vulnerabilities.length > 0 && (
+                  <button
+                    onClick={() => apiService.exportVulnerabilities(selectedVulnerabilities.id)}
+                    className="px-3 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors flex items-center text-sm"
+                  >
+                    <Download className="w-4 h-4 mr-1" />
+                    CSV
+                  </button>
+                )}
+
+                <button
+                  onClick={() => setSelectedVulnerabilities(null)}
+                  className={`${theme.textMuted} hover:text-gray-700 transition-colors`}
+                >
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex-1 overflow-y-auto p-6">
+            {loading ? (
+              <div className="flex items-center justify-center py-12">
+                <div className="animate-spin w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full"></div>
+                <span className={`ml-3 ${theme.text}`}>Chargement des vulnérabilités...</span>
+              </div>
+            ) : vulnerabilities.length === 0 ? (
+              <div className="text-center py-12">
+                <Shield className="w-16 h-16 text-green-500 mx-auto mb-4" />
+                <p className={`text-lg font-medium ${theme.text}`}>Aucune vulnérabilité détectée</p>
+                <p className={`${theme.textMuted}`}>Ce dépôt semble sécurisé !</p>
+              </div>
+            ) : (
+              <div className="space-y-6">
+                {Object.entries(groupedVulnerabilities).map(([groupName, vulns]) => (
+                  <div key={groupName}>
+                    <div className="flex items-center mb-4">
+                      <h3 className={`text-lg font-semibold ${theme.text} flex items-center`}>
+                        {groupBy === "severity" && (
+                          <div
+                            className={`w-4 h-4 rounded ${getSeverityColor(groupName)} mr-2`}
+                          ></div>
+                        )}
+                        {groupName}
+                        <span className={`ml-2 px-2 py-1 bg-gray-100 ${theme.textMuted} text-sm rounded-full`}>
+                          {vulns.length}
+                        </span>
+                      </h3>
+                    </div>
+
+                    <div className="grid gap-4">
+                      {vulns.map((vuln, index) => (
+                        <div
+                          key={`${vuln.id}-${index}`}
+                          className={`${
+                            darkMode ? "bg-gray-700" : "bg-gray-50"
+                          } p-4 rounded-lg border-l-4 ${getSeverityColor(vuln.severity)}`}
+                        >
+                          <div className="flex items-start justify-between mb-2">
+                            <div className="flex-1">
+                              <h4 className={`font-semibold ${theme.text} mb-1`}>
+                                {vuln.title || vuln.vuln_id}
+                              </h4>
+                              <div className="flex items-center space-x-4 text-sm">
+                                <span
+                                  className={`px-2 py-1 rounded text-white text-xs ${getSeverityColor(vuln.severity)}`}
+                                >
+                                  {vuln.severity}
+                                </span>
+                                <span className={`${theme.textMuted}`}>📦 {vuln.package_name}</span>
+                                <span className={`${theme.textMuted}`}>🆔 {vuln.vuln_id}</span>
+                              </div>
+                            </div>
+                          </div>
+
+                          <p className={`${theme.text} text-sm mb-3 leading-relaxed`}>{vuln.description}</p>
+
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+                            <div>
+                              <span className={`font-medium ${theme.textMuted}`}>Version installée:</span>
+                              <div className={`${theme.text} font-mono`}>{vuln.version || "N/A"}</div>
+                            </div>
+                            <div>
+                              <span className={`font-medium ${theme.textMuted}`}>Version corrigée:</span>
+                              <div className={`${theme.text} font-mono`}>{vuln.fixed_version || "N/A"}</div>
+                            </div>
+                          </div>
+
+                          {vuln.reference_links && (
+                            <div className="mt-3 pt-3 border-t border-gray-200">
+                              <span className={`font-medium ${theme.textMuted} text-xs`}>Références:</span>
+                              <div className="mt-1">
+                                {(() => {
+                                  try {
+                                    const refs = Array.isArray(vuln.reference_links)
+                                      ? vuln.reference_links
+                                      : JSON.parse(vuln.reference_links);
+
+                                    return refs.slice(0, 3).map((ref, i) => (
+                                      <a
+                                        key={i}
+                                        href={ref}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="text-blue-600 hover:underline text-xs mr-3"
+                                      >
+                                        {ref.length > 50 ? `${ref.slice(0, 47)}...` : ref}
+                                      </a>
+                                    ));
+                                  } catch {
+                                    return (
+                                      <span className={`text-xs ${theme.textMuted}`}>
+                                        Références non disponibles
+                                      </span>
+                                    );
+                                  }
+                                })()}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      ))}
                     </div>
                   </div>
                 ))}
               </div>
-
-              {/* Détails supplémentaires */}
-              {results.details && (
-                <div>
-                  <h4 style={{ marginBottom: '1rem', fontSize: '1.1rem' }}>
-                    📋 Détails des vulnérabilités
-                  </h4>
-                  <div style={{
-                    backgroundColor: darkMode ? '#2a2a4a' : '#f8f9fa',
-                    padding: '1rem',
-                    borderRadius: '0.5rem',
-                    maxHeight: '300px',
-                    overflow: 'auto',
-                    fontSize: '0.875rem',
-                    fontFamily: 'monospace',
-                    whiteSpace: 'pre-wrap',
-                    color: theme.text
-                  }}>
-                    {typeof results.details === 'string' ? results.details : JSON.stringify(results.details, null, 2)}
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Message d'erreur */}
-          {scan.error_message && (
-            <div style={{
-              backgroundColor: theme.danger + '20',
-              border: `1px solid ${theme.danger}`,
-              borderRadius: '0.5rem',
-              padding: '1rem',
-              marginTop: '1rem'
-            }}>
-              <h4 style={{ margin: '0 0 0.5rem 0', color: theme.danger }}>
-                ❌ Erreur
-              </h4>
-              <p style={{ margin: 0, color: theme.text }}>
-                {scan.error_message}
-              </p>
-            </div>
-          )}
-
-          {/* Actions */}
-          <div style={{
-            display: 'flex',
-            gap: '1rem',
-            marginTop: '2rem',
-            paddingTop: '1rem',
-            borderTop: `1px solid ${theme.border}`,
-            justifyContent: 'flex-end'
-          }}>
-            <button
-              onClick={() => rerunScan(scan)}
-              style={{
-                padding: '0.75rem 1.5rem',
-                backgroundColor: theme.primary,
-                color: 'white',
-                border: 'none',
-                borderRadius: '0.5rem',
-                cursor: 'pointer',
-                fontSize: '0.875rem',
-                fontWeight: '500'
-              }}
-            >
-              🔄 Relancer
-            </button>
-            <button
-              onClick={onClose}
-              style={{
-                padding: '0.75rem 1.5rem',
-                backgroundColor: 'transparent',
-                border: `1px solid ${theme.border}`,
-                color: theme.text,
-                borderRadius: '0.5rem',
-                cursor: 'pointer',
-                fontSize: '0.875rem',
-                fontWeight: '500'
-              }}
-            >
-              Fermer
-            </button>
+            )}
           </div>
         </div>
       </div>
     );
   };
 
-  // Modal de confirmation de suppression
-  const DeleteConfirmModal = ({ scanId, onConfirm, onCancel }) => {
-    const scan = scans.find(s => s.id === scanId);
-    if (!scan) return null;
-
-    return (
-      <div style={{
-        position: 'fixed',
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        backgroundColor: 'rgba(0, 0, 0, 0.5)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        zIndex: 1001,
-        backdropFilter: 'blur(4px)'
-      }}>
-        <div style={{
-          backgroundColor: theme.cardBg,
-          color: theme.text,
-          padding: '2rem',
-          borderRadius: '0.75rem',
-          maxWidth: '400px',
-          width: '90%',
-          boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)',
-          border: `1px solid ${theme.border}`
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', marginBottom: '1rem' }}>
-            <span style={{ fontSize: '2rem', marginRight: '0.75rem' }}>🗑️</span>
-            <h3 style={{ margin: 0, color: theme.text }}>
-              Confirmer la suppression
-            </h3>
-          </div>
-          
-          <p style={{ margin: '0 0 2rem 0', color: theme.textMuted, lineHeight: 1.5 }}>
-            Êtes-vous sûr de vouloir supprimer le scan de <strong>{scan.repository}</strong> ? 
-            Cette action est irréversible.
-          </p>
-          
-          <div style={{ display: 'flex', gap: '1rem', justifyContent: 'flex-end' }}>
-            <button
-              onClick={onCancel}
-              style={{
-                padding: '0.75rem 1.5rem',
-                backgroundColor: 'transparent',
-                border: `1px solid ${theme.border}`,
-                color: theme.text,
-                borderRadius: '0.5rem',
-                cursor: 'pointer',
-                fontSize: '0.875rem',
-                fontWeight: '500',
-                transition: 'all 0.2s'
-              }}
-            >
-              Annuler
-            </button>
-            <button
-              onClick={onConfirm}
-              style={{
-                padding: '0.75rem 1.5rem',
-                backgroundColor: theme.danger,
-                color: 'white',
-                border: 'none',
-                borderRadius: '0.5rem',
-                cursor: 'pointer',
-                fontSize: '0.875rem',
-                fontWeight: '500',
-                transition: 'all 0.2s'
-              }}
-            >
-              Supprimer
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  };
-
-  // ✅ RENDU PRINCIPAL
+  // Rendu principal
   return (
-    <div style={{
-      backgroundColor: theme.bg,
-      color: theme.text,
-      minHeight: '100vh',
-      transition: 'all 0.3s ease'
-    }}>
-      {/* En-tête */}
-      <header style={{
-        backgroundColor: theme.cardBg,
-        borderBottom: `1px solid ${theme.border}`,
-        padding: '1rem 2rem',
-        position: 'sticky',
-        top: 0,
-        zIndex: 100,
-        boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06)'
-      }}>
-        <div style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          maxWidth: '1200px',
-          margin: '0 auto'
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-            <h1 style={{ margin: 0, fontSize: '1.75rem', fontWeight: 'bold' }}>
-              🛡️ Security Scanner
-            </h1>
-            <span style={{
-              padding: '0.25rem 0.75rem',
-              backgroundColor: theme.primary + '20',
-              color: theme.primary,
-              borderRadius: '1rem',
-              fontSize: '0.75rem',
-              fontWeight: 'bold'
-            }}>
-              v1.0
-            </span>
-          </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-            {/* Statut WebSocket */}
-            <div style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.5rem',
-              padding: '0.5rem 1rem',
-              backgroundColor: ws && ws.readyState === WebSocket.OPEN ? theme.success + '20' : theme.warning + '20',
-              borderRadius: '2rem',
-              fontSize: '0.875rem'
-            }}>
-              <span style={{
-                width: '0.5rem',
-                height: '0.5rem',
-                backgroundColor: ws && ws.readyState === WebSocket.OPEN ? theme.success : theme.warning,
-                borderRadius: '50%',
-                animation: wsReconnecting ? 'pulse 1.5s ease-in-out infinite' : 'none'
-              }} />
-              {ws && ws.readyState === WebSocket.OPEN ? '🟢 Connecté' : '🟡 Reconnexion...'}
+    <div className={`min-h-screen ${theme.bg} transition-colors duration-300`}>
+      {/* Header */}
+      <header
+        className={`${theme.cardBg} shadow-sm ${theme.border} border-b sticky top-0 z-40`}
+      >
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex justify-between items-center py-4">
+            <div className="flex items-center space-x-4">
+              <Shield className="w-8 h-8 text-blue-600" />
+              <div>
+                <h1 className={`text-2xl font-bold ${theme.text}`}>
+                  Security Scanner
+                </h1>
+                <p className={`text-sm ${theme.textMuted}`}>
+                  Analyse de sécurité des dépôts GitHub
+                </p>
+              </div>
             </div>
 
-            {/* Notifications */}
-            <button
-              onClick={() => setShowNotifications(!showNotifications)}
-              style={{
-                position: 'relative',
-                padding: '0.75rem',
-                backgroundColor: 'transparent',
-                border: `1px solid ${theme.border}`,
-                borderRadius: '0.5rem',
-                color: theme.text,
-                cursor: 'pointer',
-                fontSize: '1.25rem'
-              }}
-            >
-              🔔
-              {notifications.length > 0 && (
-                <span style={{
-                  position: 'absolute',
-                  top: '-0.25rem',
-                  right: '-0.25rem',
-                  backgroundColor: theme.danger,
-                  color: 'white',
-                  borderRadius: '50%',
-                  width: '1.25rem',
-                  height: '1.25rem',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  fontSize: '0.75rem',
-                  fontWeight: 'bold'
-                }}>
-                  {notifications.length}
-                </span>
-              )}
-            </button>
+            <div className="flex items-center space-x-4">
+              {/* Statut de connexion */}
+              <div
+                className={`flex items-center px-3 py-1 rounded-full text-sm bg-green-100 text-green-800`}
+              >
+                <div className={`w-2 h-2 rounded-full mr-2 bg-green-500`}></div>
+                Connecté
+              </div>
 
-            {/* Toggle thème */}
-            <button
-              onClick={() => setDarkMode(!darkMode)}
-              style={{
-                padding: '0.75rem',
-                backgroundColor: 'transparent',
-                border: `1px solid ${theme.border}`,
-                borderRadius: '0.5rem',
-                color: theme.text,
-                cursor: 'pointer',
-                fontSize: '1.25rem'
-              }}
-            >
-              {darkMode ? '🌙' : '☀️'}
-            </button>
+              {/* Notifications */}
+              <button
+                onClick={() => setShowNotifications(!showNotifications)}
+                className={`relative p-2 ${theme.cardBg} ${theme.border} border rounded-lg hover:bg-gray-50 transition-colors`}
+              >
+                <Bell className={`w-5 h-5 ${theme.text}`} />
+                {notifications.length > 0 && (
+                  <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full h-5 w-5 flex items-center justify-center">
+                    {notifications.length}
+                  </span>
+                )}
+              </button>
+
+              {/* Toggle thème */}
+              <button
+                onClick={() => setDarkMode(!darkMode)}
+                className={`p-2 ${theme.cardBg} ${theme.border} border rounded-lg hover:bg-gray-50 transition-colors`}
+              >
+                {darkMode ? (
+                  <Sun className="w-5 h-5 text-yellow-500" />
+                ) : (
+                  <Moon className="w-5 h-5 text-gray-600" />
+                )}
+              </button>
+            </div>
           </div>
         </div>
       </header>
 
       {/* Contenu principal */}
-      <main style={{
-        maxWidth: '1200px',
-        margin: '0 auto',
-        padding: '2rem'
-      }}>
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* ✅ Statistiques améliorées */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+          <StatCard
+            title="Total des scans"
+            value={stats.total_scans || 0}
+            icon="📊"
+            color="blue"
+          />
+          <StatCard
+            title="Scans terminés"
+            value={stats.completed_scans || 0}
+            icon="✅"
+            color="green"
+          />
+          <StatCard
+            title="Vulnérabilités critiques"
+            value={vulnStats.critical || 0}
+            icon="🚨"
+            color="red"
+          />
+          <StatCard
+            title="En cours"
+            value={stats.running_scans || 0}
+            icon="⚡"
+            color="yellow"
+          />
+        </div>
+
         {/* Formulaire de scan */}
-        <div style={{
-          backgroundColor: theme.cardBg,
-          color: theme.text,
-          padding: '2rem',
-          borderRadius: '0.75rem',
-          boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
-          marginBottom: '2rem',
-          border: `2px solid ${theme.primary}20`
-        }}>
-          <h2 style={{ margin: '0 0 1.5rem 0', fontSize: '1.5rem' }}>
-            🚀 Nouveau scan de sécurité
-          </h2>
-          
-          <form onSubmit={handleScan} style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-            <div style={{ display: 'flex', gap: '1rem', alignItems: 'flex-end', flexWrap: 'wrap' }}>
-              <div style={{ flex: 1, minWidth: '300px' }}>
-                <label style={{
-                  display: 'block',
-                  marginBottom: '0.5rem',
-                  fontSize: '0.875rem',
-                  fontWeight: '600',
-                  color: theme.text
-                }}>
-                  URL du dépôt GitHub
-                </label>
-                <input
-                  type="url"
-                  value={githubUrl}
-                  onChange={(e) => setGithubUrl(e.target.value)}
-                  placeholder="https://github.com/username/repository"
-                  disabled={loading}
-                  style={{
-                    width: '100%',
-                    padding: '0.75rem 1rem',
-                    backgroundColor: theme.cardBg,
-                    border: `2px solid ${error ? theme.danger : theme.border}`,
-                    borderRadius: '0.5rem',
-                    color: theme.text,
-                    fontSize: '1rem',
-                    outline: 'none',
-                    transition: 'border-color 0.2s'
-                  }}
-                  onFocus={(e) => e.target.style.borderColor = theme.primary}
-                  onBlur={(e) => e.target.style.borderColor = error ? theme.danger : theme.border}
-                />
-              </div>
-              
-              <div>
-                <label style={{
-                  display: 'block',
-                  marginBottom: '0.5rem',
-                  fontSize: '0.875rem',
-                  fontWeight: '600',
-                  color: theme.text
-                }}>
-                  Profondeur
-                </label>
-                <select
-                  value={scanDepth}
-                  onChange={(e) => setScanDepth(e.target.value)}
-                  disabled={loading}
-                  style={{
-                    padding: '0.75rem 1rem',
-                    backgroundColor: theme.cardBg,
-                    border: `2px solid ${theme.border}`,
-                    borderRadius: '0.5rem',
-                    color: theme.text,
-                    fontSize: '1rem',
-                    outline: 'none',
-                    minWidth: '120px'
-                  }}
-                >
-                  <option value="standard">Standard</option>
-                  <option value="deep">Approfondi</option>
-                  <option value="quick">Rapide</option>
-                </select>
-              </div>
-
-              <button
-                type="submit"
-                disabled={loading || !githubUrl.trim()}
-                style={{
-                  padding: '0.75rem 2rem',
-                  backgroundColor: loading || !githubUrl.trim() ? theme.textMuted : theme.primary,
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '0.5rem',
-                  cursor: loading || !githubUrl.trim() ? 'not-allowed' : 'pointer',
-                  fontSize: '1rem',
-                  fontWeight: '600',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.5rem',
-                  transition: 'all 0.2s',
-                  minWidth: '140px',
-                  justifyContent: 'center'
-                }}
-              >
-                {loading ? (
-                  <>
-                    <span style={{ animation: 'spin 1s linear infinite' }}>⏳</span>
-                    Analyse...
-                  </>
-                ) : (
-                  <>
-                    🚀 Scanner
-                  </>
-                )}
-              </button>
-            </div>
-
-            {error && (
-              <div style={{
-                padding: '1rem',
-                backgroundColor: theme.danger + '20',
-                border: `1px solid ${theme.danger}`,
-                borderRadius: '0.5rem',
-                color: theme.danger,
-                fontSize: '0.875rem',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.5rem'
-              }}>
-                ❌ {error}
-              </div>
-            )}
-          </form>
+        <div className="mb-8">
+          <ScanForm />
         </div>
 
         {/* Scan en cours */}
         {currentScan && (
-          <ScanStatus scan={currentScan} />
-        )}
-
-        {/* Résultats du scan actuel */}
-        {currentScan && currentScan.status === 'completed' && (
-          <ScanResults scan={currentScan} />
+          <div className="mb-8">
+            <CurrentScanStatus />
+          </div>
         )}
 
         {/* Historique des scans */}
-        <ScanHistory />
+        <ScanHistoryTable />
       </main>
 
-      {/* Panel de notifications */}
+      {/* Modals et composants overlay */}
       <NotificationPanel />
-
-      {/* Modal de détails du scan */}
-      {selectedScan && (
-        <ScanDetailsModal
-          scan={selectedScan}
-          onClose={() => setSelectedScan(null)}
-        />
-      )}
-
-      {/* Modal de confirmation de suppression */}
-      {showDeleteConfirm && (
-        <DeleteConfirmModal
-          scanId={showDeleteConfirm}
-          onConfirm={() => deleteScan(showDeleteConfirm)}
-          onCancel={() => setShowDeleteConfirm(null)}
-        />
-      )}
-
-      {/* Styles CSS globaux pour les animations */}
-      <style jsx>{`
-        @keyframes spin {
-          from { transform: rotate(0deg); }
-          to { transform: rotate(360deg); }
-        }
-        
-        @keyframes pulse {
-          0%, 100% { opacity: 1; }
-          50% { opacity: 0.5; }
-        }
-        
-        @keyframes slideInRight {
-          from {
-            transform: translateX(100%);
-            opacity: 0;
-          }
-          to {
-            transform: translateX(0);
-            opacity: 1;
-          }
-        }
-        
-        @keyframes scan-progress {
-          0% { transform: translateX(-100%); }
-          100% { transform: translateX(100%); }
-        }
-        
-        /* Scrollbar personnalisée */
-        * {
-          scrollbar-width: thin;
-          scrollbar-color: ${theme.primary} ${theme.cardBg};
-        }
-        
-        *::-webkit-scrollbar {
-          width: 8px;
-          height: 8px;
-        }
-        
-        *::-webkit-scrollbar-track {
-          background: ${theme.cardBg};
-          border-radius: 4px;
-        }
-        
-        *::-webkit-scrollbar-thumb {
-          background: ${theme.primary};
-          border-radius: 4px;
-        }
-        
-        *::-webkit-scrollbar-thumb:hover {
-          background: ${theme.primary}dd;
-        }
-        
-        /* Transitions globales */
-        * {
-          transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease;
-        }
-        
-        /* Responsive */
-        @media (max-width: 768px) {
-          .main-container {
-            padding: 1rem;
-          }
-          
-          .scan-form {
-            flex-direction: column;
-          }
-          
-          .scan-form > * {
-            min-width: auto !important;
-            width: 100%;
-          }
-        }
-      `}</style>
+      <ScanDetailsModal />
+      <VulnerabilitiesModal />
     </div>
   );
 }
 
 export default App;
+
+
+
+
+
+
+
+
+// // App.js
+// import { useMemo, useState } from "react";
+
+// // Components
+// import Header from "./components/layout/Header";
+// import NotificationPanel from "./components/common/NotificationPanel";
+// import StatCard from "./components/common/StatCard";
+// import ScanForm from "./components/scan/ScanForm";
+// import CurrentScanStatus from "./components/scan/CurrentScanStatus";
+// import ScanHistoryTable from "./components/scan/ScanHistoryTable";
+// import ScanDetailsModal from "./components/scan/ScanDetailsModal";
+// import VulnerabilitiesModal from "./components/scan/VulnerabilitiesModal";
+
+// // Hooks
+// import { useScanManagement } from "./components/hooks/useScanManagement";
+// import { useNotifications } from "./components/hooks/useNotifications";
+
+// // Utils
+// import { createTheme } from "./components/utils";
+
+// function App() {
+//   // UI State
+//   const [darkMode, setDarkMode] = useState(true);
+//   const [githubUrl, setGithubUrl] = useState("");
+//   const [selectedScan, setSelectedScan] = useState(null);
+//   const [selectedVulnerabilities, setSelectedVulnerabilities] = useState(null);
+
+//   // Custom hooks
+//   const {
+//     scans,
+//     currentScan,
+//     loading,
+//     error,
+//     stats,
+//     vulnStats,
+//     searchTerm,
+//     setSearchTerm,
+//     filterStatus,
+//     setFilterStatus,
+//     scanDepth,
+//     setScanDepth,
+//     handleScan,
+//   } = useScanManagement();
+
+//   const {
+//     notifications,
+//     showNotifications,
+//     setShowNotifications,
+//     addNotification,
+//     setNotifications,
+//   } = useNotifications();
+
+//   // Theme
+//   const theme = useMemo(() => createTheme(darkMode), [darkMode]);
+
+//   // Filtered scans
+//   const filteredScans = useMemo(() => {
+//     return scans
+//       .filter((scan) => {
+//         const matchesSearch =
+//           !searchTerm ||
+//           scan.repository?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+//           scan.github_url?.toLowerCase().includes(searchTerm.toLowerCase());
+//         const matchesFilter = filterStatus === "all" || scan.status === filterStatus;
+//         return matchesSearch && matchesFilter;
+//       })
+//       .sort((a, b) => new Date(b.start_time) - new Date(a.start_time));
+//   }, [scans, searchTerm, filterStatus]);
+
+//   // Scan handler
+//   const onScan = async () => {
+//     const success = await handleScan(githubUrl, scanDepth, addNotification);
+//     if (success) {
+//       setGithubUrl("");
+//     }
+//   };
+
+//   return (
+//     <div className={`min-h-screen ${theme.bg} transition-colors duration-300`}>
+//       <Header
+//         theme={theme}
+//         notifications={notifications}
+//         showNotifications={showNotifications}
+//         setShowNotifications={setShowNotifications}
+//         darkMode={darkMode}
+//         setDarkMode={setDarkMode}
+//       />
+
+//       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+//         {/* Statistics */}
+//         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+//           <StatCard
+//             title="Total des scans"
+//             value={stats.total_scans || 0}
+//             icon="📊"
+//             color="blue"
+//             theme={theme}
+//           />
+//           <StatCard
+//             title="Scans terminés"
+//             value={stats.completed_scans || 0}
+//             icon="✅"
+//             color="green"
+//             theme={theme}
+//           />
+//           <StatCard
+//             title="Vulnérabilités critiques"
+//             value={vulnStats.critical || 0}
+//             icon="🚨"
+//             color="red"
+//             theme={theme}
+//           />
+//           <StatCard
+//             title="En cours"
+//             value={stats.running_scans || 0}
+//             icon="⚡"
+//             color="yellow"
+//             theme={theme}
+//           />
+//         </div>
+
+//         {/* Scan Form */}
+//         <div className="mb-8">
+//           <ScanForm
+//             theme={theme}
+//             githubUrl={githubUrl}
+//             setGithubUrl={setGithubUrl}
+//             scanDepth={scanDepth}
+//             setScanDepth={setScanDepth}
+//             loading={loading}
+//             error={error}
+//             onScan={onScan}
+//           />
+//         </div>
+
+//         {/* Current Scan Status */}
+//         {currentScan && (
+//           <div className="mb-8">
+//             <CurrentScanStatus
+//               currentScan={currentScan}
+//               theme={theme}
+//               setSelectedVulnerabilities={setSelectedVulnerabilities}
+//             />
+//           </div>
+//         )}
+
+//         {/* Scan History */}
+//         <ScanHistoryTable
+//           theme={theme}
+//           darkMode={darkMode}
+//           filteredScans={filteredScans}
+//           searchTerm={searchTerm}
+//           setSearchTerm={setSearchTerm}
+//           filterStatus={filterStatus}
+//           setFilterStatus={setFilterStatus}
+//           setSelectedScan={setSelectedScan}
+//           setSelectedVulnerabilities={setSelectedVulnerabilities}
+//           setGithubUrl={setGithubUrl}
+//           setScanDepth={setScanDepth}
+//           addNotification={addNotification}
+//         />
+//       </main>
+
+//       {/* Modals and Overlays */}
+//       <NotificationPanel
+//         theme={theme}
+//         notifications={notifications}
+//         showNotifications={showNotifications}
+//         setNotifications={setNotifications}
+//       />
+      
+//       <ScanDetailsModal
+//         selectedScan={selectedScan}
+//         setSelectedScan={setSelectedScan}
+//         setSelectedVulnerabilities={setSelectedVulnerabilities}
+//         theme={theme}
+//         darkMode={darkMode}
+//       />
+      
+//       <VulnerabilitiesModal
+//         selectedVulnerabilities={selectedVulnerabilities}
+//         setSelectedVulnerabilities={setSelectedVulnerabilities}
+//         theme={theme}
+//         darkMode={darkMode}
+//         addNotification={addNotification}
+//       />
+//     </div>
+//   );
+// }
+
+// export default App;
