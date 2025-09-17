@@ -1,6 +1,6 @@
-# 🛡️ DevSecOps Security Scanning Pipeline - Fixed Cached Version
+# 🛡️ DevSecOps Security Scanning Pipeline -  Cached Version
 
-name: 🔒 Security Scanner (Cached - Fixed)
+name: 🔒 Security Scanner Workflow
 
 on:
   workflow_dispatch:
@@ -21,7 +21,7 @@ on:
         description: 'Horodatage du déclenchement'
         required: false
       scan_depth:
-        description: 'Niveau de scan (quick, standard, deep)'
+        description: 'Niveau de scan (standard, deep)'
         required: false
         default: 'standard'
         type: choice
@@ -778,45 +778,6 @@ jobs:
           retention-days: 30
           if-no-files-found: warn
 
-  # ===============================
-  # OPTIONAL: CACHE WARMING JOB
-  # ===============================
-  cache-warmup:
-    name: 🔥 Cache Warmup (Optional)
-    runs-on: ubuntu-latest
-    if: false  # Set to true to enable cache warmup
-    steps:
-      - name: 🔥 Warm Up Caches
-        run: |
-          echo "🔥 This job can be used to pre-warm caches"
-          echo "Enable by setting 'if: true' above"
-          
-      # Pre-install tools to warm up cache
-      - name: 🐍 Setup Python (Cache Warmup)
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
-          cache: 'pip'
-          
-      - name: 🟢 Setup Node.js (Cache Warmup)
-        uses: actions/setup-node@v4
-        with:
-          node-version: '18'
-          cache: 'npm'
-          
-      - name: 🔧 Install Tools (Cache Warmup)
-        run: |
-          # Install Trivy
-          wget -qO trivy.deb "https://github.com/aquasecurity/trivy/releases/download/v0.48.3/trivy_0.48.3_Linux-64bit.deb"
-          sudo dpkg -i trivy.deb
-          
-          # Install Snyk
-          sudo npm install -g snyk@latest
-          
-          # Update Trivy DB
-          trivy image --download-db-only
-          
-          echo "✅ Cache warmup completed"
 # # .github/workflows/security-scan.yml
 # # 🛡️ DevSecOps Security Scanning Pipeline - Enhanced Version
 
