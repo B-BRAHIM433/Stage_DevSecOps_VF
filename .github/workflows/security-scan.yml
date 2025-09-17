@@ -1,6 +1,6 @@
-# 🛡️ DevSecOps Security Scanning Pipeline - Cached Version
+# 🛡️ DevSecOps Security Scanning Pipeline - Fixed Cached Version
 
-name: 🔒 Security Scanner (Cached)
+name: 🔒 Security Scanner (Cached - Fixed)
 
 on:
   workflow_dispatch:
@@ -27,8 +27,7 @@ on:
         type: choice
         options:
           - standard
-          - comprehensive
-          - quick
+          - deep
 
 env:
   SCAN_ID: ${{ github.event.inputs.scan_id }}
@@ -82,134 +81,104 @@ jobs:
           echo "LOW_COUNT=0" >> $GITHUB_ENV
 
       # ===============================
-      # CACHED PYTHON SETUP
+      # BASIC SETUP (No premature caching)
       # ===============================
-      - name: 🐍 Setup Python (Cached)
+      - name: 🐍 Setup Python
         uses: actions/setup-python@v4
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-          cache: 'pip'
 
-      - name: 📦 Cache Python Dependencies
-        uses: actions/cache@v3
-        with:
-          path: ~/.cache/pip
-          key: python-deps-${{ env.PYTHON_VERSION }}-${{ hashFiles('**/requirements.txt', '**/setup.py', '**/pyproject.toml') }}
-          restore-keys: |
-            python-deps-${{ env.PYTHON_VERSION }}-
-
-      # ===============================
-      # CACHED NODE.JS SETUP
-      # ===============================
-      - name: 🟢 Setup Node.js (Cached)
+      - name: 🟢 Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-
-      - name: 📦 Cache Node.js Global Packages
-        id: cache-node-global
-        uses: actions/cache@v3
-        with:
-          path: |
-            ~/.npm
-            /usr/local/lib/node_modules
-            /usr/local/bin/snyk
-          key: node-global-${{ env.NODE_VERSION }}-snyk-${{ hashFiles('.github/workflows/*.yml') }}
-          restore-keys: |
-            node-global-${{ env.NODE_VERSION }}-snyk-
 
       # ===============================
-      # CACHED TRIVY SETUP
+      # CACHED TRIVY INSTALLATION
       # ===============================
-      - name: 📦 Cache Trivy Binary
+      - name: 📦 Cache Trivy Binary & Database
         id: cache-trivy
         uses: actions/cache@v3
         with:
           path: |
             /usr/local/bin/trivy
             ~/.cache/trivy
-          key: trivy-${{ env.TRIVY_VERSION }}-${{ runner.os }}
+          key: trivy-${{ env.TRIVY_VERSION }}-${{ runner.os }}-db-${{ steps.get-date.outputs.date }}
           restore-keys: |
-            trivy-${{ env.TRIVY_VERSION }}-
+            trivy-${{ env.TRIVY_VERSION }}-${{ runner.os }}-db-
+            trivy-${{ env.TRIVY_VERSION }}-${{ runner.os }}-
+
+      - name: 📅 Get Date for Cache Key
+        id: get-date
+        run: echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
 
       - name: 🔧 Install Trivy (if not cached)
         if: steps.cache-trivy.outputs.cache-hit != 'true'
         run: |
-          echo "📦 Installing Trivy (not in cache)..."
+          echo "📦 Installing Trivy v${{ env.TRIVY_VERSION }} (not in cache)..."
           
           # Download and install specific Trivy version
           wget -qO trivy.deb "https://github.com/aquasecurity/trivy/releases/download/v${{ env.TRIVY_VERSION }}/trivy_${{ env.TRIVY_VERSION }}_Linux-64bit.deb"
           sudo dpkg -i trivy.deb
           rm trivy.deb
           
-          # Create cache directory
+          # Create cache directory and update database
           mkdir -p ~/.cache/trivy
+          trivy image --download-db-only
           
-          echo "✅ Trivy ${{ env.TRIVY_VERSION }} installed"
+          echo "✅ Trivy ${{ env.TRIVY_VERSION }} installed with updated database"
+
+      - name: 🔄 Update Trivy Database (if cached)
+        if: steps.cache-trivy.outputs.cache-hit == 'true'
+        run: |
+          echo "⚡ Using cached Trivy, updating database..."
+          trivy image --download-db-only
+          echo "✅ Trivy database updated"
+
+      # ===============================
+      # CACHED SNYK INSTALLATION
+      # ===============================
+      - name: 📦 Cache Snyk Installation
+        id: cache-snyk
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.npm
+            /usr/local/lib/node_modules/snyk
+            /usr/local/bin/snyk
+          key: snyk-global-${{ env.NODE_VERSION }}-${{ hashFiles('.github/workflows/*.yml') }}
+          restore-keys: |
+            snyk-global-${{ env.NODE_VERSION }}-
 
       - name: 🔧 Install Snyk (if not cached)
-        if: steps.cache-node-global.outputs.cache-hit != 'true'
+        if: steps.cache-snyk.outputs.cache-hit != 'true'
         run: |
           echo "📦 Installing Snyk (not in cache)..."
           sudo npm install -g snyk@latest
           echo "✅ Snyk installed globally"
 
       # ===============================
-      # VERIFY CACHED TOOLS
+      # VERIFY TOOLS
       # ===============================
       - name: ✅ Verify Tool Installations
         run: |
-          echo "🔍 Verifying cached tools..."
+          echo "🔍 Verifying tools..."
+          echo "⚡ Cache Performance:"
+          echo "  🔧 Trivy cache hit: ${{ steps.cache-trivy.outputs.cache-hit }}"
+          echo "  🟢 Snyk cache hit: ${{ steps.cache-snyk.outputs.cache-hit }}"
           
-          echo "Trivy version:"
-          trivy --version
-          
-          echo "Snyk version:"
-          snyk --version
-          
-          echo "Node.js version:"
-          node --version
-          
-          echo "npm version:"
-          npm --version
-          
-          echo "Python version:"
-          python3 --version
+          echo ""
+          echo "📋 Tool Versions:"
+          echo "Trivy: $(trivy --version)"
+          echo "Snyk: $(snyk --version)"
+          echo "Node.js: $(node --version)"
+          echo "Python: $(python3 --version)"
           
           echo "✅ All tools verified successfully"
 
       # ===============================
-      # CACHED TRIVY DATABASE
+      # REPOSITORY CLONING
       # ===============================
-      - name: 📊 Cache Trivy Database
-        uses: actions/cache@v3
-        with:
-          path: ~/.cache/trivy/db
-          key: trivy-db-${{ hashFiles('.github/workflows/*.yml') }}-${{ steps.get-date.outputs.date }}
-          restore-keys: |
-            trivy-db-${{ hashFiles('.github/workflows/*.yml') }}-
-            trivy-db-
-
-      - name: 📅 Get Date for Cache Key
-        id: get-date
-        run: echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
-
-      - name: 🔄 Update Trivy Database
-        run: |
-          echo "🔄 Updating Trivy vulnerability database..."
-          trivy image --download-db-only
-          echo "✅ Trivy database updated"
-
-      # ===============================
-      # REPOSITORY CLONING (with cache)
-      # ===============================
-      - name: 📦 Cache Git LFS
-        uses: actions/cache@v3
-        with:
-          path: ~/.gitlfs
-          key: git-lfs-${{ runner.os }}
-
       - name: 📂 Clone Target Repository
         id: clone-repo
         run: |
@@ -225,7 +194,7 @@ jobs:
           
           # Clone with depth based on scan level
           CLONE_DEPTH=1
-          if [ "${{ env.SCAN_DEPTH }}" = "comprehensive" ]; then
+          if [ "${{ env.SCAN_DEPTH }}" = "deep" ]; then
             CLONE_DEPTH=50
           elif [ "${{ env.SCAN_DEPTH }}" = "standard" ]; then
             CLONE_DEPTH=10
@@ -251,28 +220,22 @@ jobs:
           echo "files-count=$FILE_COUNT" >> $GITHUB_OUTPUT
 
       # ===============================
-      # SNYK CONFIGURATION (cached auth)
+      # SNYK CONFIGURATION
       # ===============================
-      - name: 📦 Cache Snyk Configuration
-        uses: actions/cache@v3
-        with:
-          path: ~/.config/configstore/snyk.json
-          key: snyk-auth-${{ hashFiles('.github/workflows/*.yml') }}
-
       - name: 🔐 Configure Snyk Authentication
-        if: ${{ env.SCAN_DEPTH == 'comprehensive' || env.SCAN_DEPTH == 'standard' }}
+        if: ${{ env.SCAN_DEPTH == 'deep' || env.SCAN_DEPTH == 'standard' }}
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         run: |
           if [ -n "$SNYK_TOKEN" ]; then
             snyk auth "$SNYK_TOKEN"
-            echo "✅ Snyk authenticated (using cached config if available)"
+            echo "✅ Snyk authenticated"
           else
             echo "⚠️ SNYK_TOKEN not provided - some scans will be limited"
           fi
 
       # ===============================
-      # SECURITY SCANS (unchanged)
+      # SECURITY SCANS
       # ===============================
       - name: 🔍 Filesystem Security Scan
         id: trivy-fs
@@ -884,7 +847,7 @@ jobs:
 #         type: choice
 #         options:
 #           - standard
-#           - comprehensive
+#           - 
 #           - quick
 
 # env:
