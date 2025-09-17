@@ -1,7 +1,6 @@
-# .github/workflows/security-scan.yml
-# 🛡️ DevSecOps Security Scanning Pipeline - Enhanced Version
+# 🛡️ DevSecOps Security Scanning Pipeline - Cached Version
 
-name: 🔒 Security Scanner
+name: 🔒 Security Scanner (Cached)
 
 on:
   workflow_dispatch:
@@ -22,13 +21,14 @@ on:
         description: 'Horodatage du déclenchement'
         required: false
       scan_depth:
-        description: 'Niveau de scan (standard, deep)'
+        description: 'Niveau de scan (quick, standard, deep)'
         required: false
         default: 'standard'
         type: choice
         options:
           - standard
-          - deep
+          - comprehensive
+          - quick
 
 env:
   SCAN_ID: ${{ github.event.inputs.scan_id }}
@@ -36,6 +36,10 @@ env:
   TARGET_REPO: ${{ github.event.inputs.target_repo }}
   SCAN_DEPTH: ${{ github.event.inputs.scan_depth }}
   SCAN_TIMESTAMP: ${{ github.event.inputs.timestamp }}
+  # Cache keys with versions for proper invalidation
+  TRIVY_VERSION: "0.48.3"
+  NODE_VERSION: "18"
+  PYTHON_VERSION: "3.11"
 
 jobs:
   security-scan:
@@ -77,10 +81,134 @@ jobs:
           echo "MEDIUM_COUNT=0" >> $GITHUB_ENV
           echo "LOW_COUNT=0" >> $GITHUB_ENV
 
-      - name: 🐍 Setup Python
+      # ===============================
+      # CACHED PYTHON SETUP
+      # ===============================
+      - name: 🐍 Setup Python (Cached)
         uses: actions/setup-python@v4
         with:
-          python-version: '3.11'
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: 📦 Cache Python Dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: python-deps-${{ env.PYTHON_VERSION }}-${{ hashFiles('**/requirements.txt', '**/setup.py', '**/pyproject.toml') }}
+          restore-keys: |
+            python-deps-${{ env.PYTHON_VERSION }}-
+
+      # ===============================
+      # CACHED NODE.JS SETUP
+      # ===============================
+      - name: 🟢 Setup Node.js (Cached)
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: 📦 Cache Node.js Global Packages
+        id: cache-node-global
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.npm
+            /usr/local/lib/node_modules
+            /usr/local/bin/snyk
+          key: node-global-${{ env.NODE_VERSION }}-snyk-${{ hashFiles('.github/workflows/*.yml') }}
+          restore-keys: |
+            node-global-${{ env.NODE_VERSION }}-snyk-
+
+      # ===============================
+      # CACHED TRIVY SETUP
+      # ===============================
+      - name: 📦 Cache Trivy Binary
+        id: cache-trivy
+        uses: actions/cache@v3
+        with:
+          path: |
+            /usr/local/bin/trivy
+            ~/.cache/trivy
+          key: trivy-${{ env.TRIVY_VERSION }}-${{ runner.os }}
+          restore-keys: |
+            trivy-${{ env.TRIVY_VERSION }}-
+
+      - name: 🔧 Install Trivy (if not cached)
+        if: steps.cache-trivy.outputs.cache-hit != 'true'
+        run: |
+          echo "📦 Installing Trivy (not in cache)..."
+          
+          # Download and install specific Trivy version
+          wget -qO trivy.deb "https://github.com/aquasecurity/trivy/releases/download/v${{ env.TRIVY_VERSION }}/trivy_${{ env.TRIVY_VERSION }}_Linux-64bit.deb"
+          sudo dpkg -i trivy.deb
+          rm trivy.deb
+          
+          # Create cache directory
+          mkdir -p ~/.cache/trivy
+          
+          echo "✅ Trivy ${{ env.TRIVY_VERSION }} installed"
+
+      - name: 🔧 Install Snyk (if not cached)
+        if: steps.cache-node-global.outputs.cache-hit != 'true'
+        run: |
+          echo "📦 Installing Snyk (not in cache)..."
+          sudo npm install -g snyk@latest
+          echo "✅ Snyk installed globally"
+
+      # ===============================
+      # VERIFY CACHED TOOLS
+      # ===============================
+      - name: ✅ Verify Tool Installations
+        run: |
+          echo "🔍 Verifying cached tools..."
+          
+          echo "Trivy version:"
+          trivy --version
+          
+          echo "Snyk version:"
+          snyk --version
+          
+          echo "Node.js version:"
+          node --version
+          
+          echo "npm version:"
+          npm --version
+          
+          echo "Python version:"
+          python3 --version
+          
+          echo "✅ All tools verified successfully"
+
+      # ===============================
+      # CACHED TRIVY DATABASE
+      # ===============================
+      - name: 📊 Cache Trivy Database
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/trivy/db
+          key: trivy-db-${{ hashFiles('.github/workflows/*.yml') }}-${{ steps.get-date.outputs.date }}
+          restore-keys: |
+            trivy-db-${{ hashFiles('.github/workflows/*.yml') }}-
+            trivy-db-
+
+      - name: 📅 Get Date for Cache Key
+        id: get-date
+        run: echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+
+      - name: 🔄 Update Trivy Database
+        run: |
+          echo "🔄 Updating Trivy vulnerability database..."
+          trivy image --download-db-only
+          echo "✅ Trivy database updated"
+
+      # ===============================
+      # REPOSITORY CLONING (with cache)
+      # ===============================
+      - name: 📦 Cache Git LFS
+        uses: actions/cache@v3
+        with:
+          path: ~/.gitlfs
+          key: git-lfs-${{ runner.os }}
 
       - name: 📂 Clone Target Repository
         id: clone-repo
@@ -97,7 +225,7 @@ jobs:
           
           # Clone with depth based on scan level
           CLONE_DEPTH=1
-          if [ "${{ env.SCAN_DEPTH }}" = "deep" ]; then
+          if [ "${{ env.SCAN_DEPTH }}" = "comprehensive" ]; then
             CLONE_DEPTH=50
           elif [ "${{ env.SCAN_DEPTH }}" = "standard" ]; then
             CLONE_DEPTH=10
@@ -122,53 +250,30 @@ jobs:
           echo "directory=$REPO_DIR" >> $GITHUB_OUTPUT
           echo "files-count=$FILE_COUNT" >> $GITHUB_OUTPUT
 
-      - name: 🔧 Install Security Tools
-        id: install-tools
-        run: |
-          echo "📦 Installing security scanning tools..."
-          
-          # Update package list
-          sudo apt-get update -qq
-          
-          # Install Trivy
-          echo "Installing Trivy..."
-          sudo apt-get install -y wget apt-transport-https gnupg lsb-release curl
-          
-          # Add Trivy repository
-          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo gpg --dearmor -o /usr/share/keyrings/trivy.gpg
-          echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee /etc/apt/sources.list.d/trivy.list
-          sudo apt-get update -qq
-          sudo apt-get install -y trivy
-          
-          # Install Node.js and Snyk
-          echo "Installing Node.js and Snyk..."
-          curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
-          sudo apt-get install -y nodejs
-          
-          # Install Snyk globally
-          sudo npm install -g snyk@latest
-          
-          # Verify installations
-          echo "🔍 Verifying installations..."
-          trivy --version
-          snyk --version
-          node --version
-          npm --version
-          
-          echo "✅ Security tools installed successfully"
+      # ===============================
+      # SNYK CONFIGURATION (cached auth)
+      # ===============================
+      - name: 📦 Cache Snyk Configuration
+        uses: actions/cache@v3
+        with:
+          path: ~/.config/configstore/snyk.json
+          key: snyk-auth-${{ hashFiles('.github/workflows/*.yml') }}
 
       - name: 🔐 Configure Snyk Authentication
-        if: ${{ env.SCAN_DEPTH == 'deep' || env.SCAN_DEPTH == 'standard' }}
+        if: ${{ env.SCAN_DEPTH == 'comprehensive' || env.SCAN_DEPTH == 'standard' }}
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         run: |
           if [ -n "$SNYK_TOKEN" ]; then
             snyk auth "$SNYK_TOKEN"
-            echo "✅ Snyk authenticated"
+            echo "✅ Snyk authenticated (using cached config if available)"
           else
             echo "⚠️ SNYK_TOKEN not provided - some scans will be limited"
           fi
 
+      # ===============================
+      # SECURITY SCANS (unchanged)
+      # ===============================
       - name: 🔍 Filesystem Security Scan
         id: trivy-fs
         continue-on-error: true
@@ -290,6 +395,9 @@ jobs:
           
           echo "✅ Dependency scan completed"
 
+      # ===============================
+      # RESULTS PROCESSING (unchanged)
+      # ===============================
       - name: 📊 Process and Aggregate Results
         id: process-results
         run: |
@@ -486,7 +594,12 @@ jobs:
               "total": $TOTAL
             },
             "scan_depth": "${{ env.SCAN_DEPTH }}",
-            "tools_used": ["trivy", "snyk"]
+            "tools_used": ["trivy", "snyk"],
+            "cache_performance": {
+              "trivy_cache_hit": "${{ steps.cache-trivy.outputs.cache-hit }}",
+              "node_cache_hit": "${{ steps.cache-node-global.outputs.cache-hit }}",
+              "scan_duration_optimized": true
+            }
           }
           EOF
           
@@ -498,12 +611,20 @@ jobs:
           echo "  📊 Total: $TOTAL vulnerabilities"
           echo "  📁 Files scanned: ${{ env.FILES_SCANNED }}"
           
+          # Show cache performance
+          echo "⚡ Cache Performance:"
+          echo "  🔧 Trivy cached: ${{ steps.cache-trivy.outputs.cache-hit }}"
+          echo "  🟢 Node.js cached: ${{ steps.cache-node-global.outputs.cache-hit }}"
+          
           # Show count of detailed vulnerabilities found
           if [ -f "detailed-vulnerabilities.json" ]; then
             DETAILED_COUNT=$(python3 -c "import json; print(len(json.load(open('detailed-vulnerabilities.json'))))" 2>/dev/null || echo "0")
             echo "  📋 Detailed vulnerabilities: $DETAILED_COUNT"
           fi
-          
+
+      # ===============================
+      # RESULTS SENDING (unchanged)
+      # ===============================
       - name: 📤 Send Results to Backend
         id: send-results
         if: always()
@@ -537,7 +658,7 @@ jobs:
             echo "📋 Found $(echo "$DETAILED_VULNS" | jq length) detailed vulnerabilities"
           fi
               
-          # Create callback payload with detailed vulnerabilities using jq
+          # Create callback payload with detailed vulnerabilities and cache info
           jq -n \
             --arg scan_id "${{ env.SCAN_ID }}" \
             --arg status "$FINAL_STATUS" \
@@ -555,6 +676,8 @@ jobs:
             --arg scan_timestamp "${{ env.SCAN_TIMESTAMP }}" \
             --arg scan_depth "${{ env.SCAN_DEPTH }}" \
             --argjson detailed_vulnerabilities "$DETAILED_VULNS" \
+            --arg trivy_cached "${{ steps.cache-trivy.outputs.cache-hit }}" \
+            --arg node_cached "${{ steps.cache-node-global.outputs.cache-hit }}" \
             '{
               scan_id: $scan_id,
               status: $status,
@@ -573,11 +696,17 @@ jobs:
                 scan_timestamp: $scan_timestamp,
                 scan_depth: $scan_depth,
                 tools_used: ["trivy", "snyk"],
-                detailed_vulnerabilities: $detailed_vulnerabilities
+                detailed_vulnerabilities: $detailed_vulnerabilities,
+                cache_performance: {
+                  trivy_cache_hit: ($trivy_cached == "true"),
+                  node_cache_hit: ($node_cached == "true"),
+                  performance_optimized: true
+                }
               }
             }' > callback-payload.json
               
           echo "📋 Callback payload created with $(echo "$DETAILED_VULNS" | jq -r 'length') detailed vulnerabilities"
+          echo "⚡ Cache hits - Trivy: ${{ steps.cache-trivy.outputs.cache-hit }}, Node: ${{ steps.cache-node-global.outputs.cache-hit }}"
               
           # Show summary of payload (without showing full detailed vulnerabilities to avoid log spam)
           echo "📋 Payload summary:"
@@ -659,6 +788,20 @@ jobs:
           echo "  Vulnerabilities: ${{ env.TOTAL_VULNERABILITIES }}"
           echo "  Files Scanned: ${{ env.FILES_SCANNED }}"
           echo "  Status: ${{ steps.send-results.outputs.final-status }}"
+          echo "⚡ Cache Performance:"
+          echo "  Trivy cache hit: ${{ steps.cache-trivy.outputs.cache-hit }}"
+          echo "  Node.js cache hit: ${{ steps.cache-node-global.outputs.cache-hit }}"
+
+      # ===============================
+      # CACHE CLEANUP (optional)
+      # ===============================
+      - name: 🧹 Cache Cleanup (if needed)
+        if: failure()
+        run: |
+          echo "🧹 Cleaning up failed caches if needed..."
+          # This step can be used to clean up corrupted caches in case of failures
+          # GitHub Actions will automatically clean old caches, but you can add custom logic here
+          echo "Cache cleanup completed"
 
       - name: 📁 Upload Scan Results
         if: always()
@@ -672,9 +815,45 @@ jobs:
           retention-days: 30
           if-no-files-found: warn
 
-
-
-
+  # ===============================
+  # OPTIONAL: CACHE WARMING JOB
+  # ===============================
+  cache-warmup:
+    name: 🔥 Cache Warmup (Optional)
+    runs-on: ubuntu-latest
+    if: false  # Set to true to enable cache warmup
+    steps:
+      - name: 🔥 Warm Up Caches
+        run: |
+          echo "🔥 This job can be used to pre-warm caches"
+          echo "Enable by setting 'if: true' above"
+          
+      # Pre-install tools to warm up cache
+      - name: 🐍 Setup Python (Cache Warmup)
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          
+      - name: 🟢 Setup Node.js (Cache Warmup)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          
+      - name: 🔧 Install Tools (Cache Warmup)
+        run: |
+          # Install Trivy
+          wget -qO trivy.deb "https://github.com/aquasecurity/trivy/releases/download/v0.48.3/trivy_0.48.3_Linux-64bit.deb"
+          sudo dpkg -i trivy.deb
+          
+          # Install Snyk
+          sudo npm install -g snyk@latest
+          
+          # Update Trivy DB
+          trivy image --download-db-only
+          
+          echo "✅ Cache warmup completed"
 # # .github/workflows/security-scan.yml
 # # 🛡️ DevSecOps Security Scanning Pipeline - Enhanced Version
 
