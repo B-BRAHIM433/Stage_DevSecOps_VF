@@ -1,6 +1,6 @@
-# 🛡️ DevSecOps Security Scanning Pipeline - Ultra Robust Cached Version
+# 🛡️ DevSecOps Security Scanning Pipeline - Cached Version
 
-name: 🔒 Security Scanner (Ultra Robust)
+name: 🔒 Security Scanner
 
 on:
   workflow_dispatch:
@@ -425,40 +425,374 @@ jobs:
             fi
           done
 
-      # ===============================
-      # RESULTS PROCESSING (same as before)
-      # ===============================
       - name: 📊 Process and Aggregate Results
         id: process-results
         run: |
           echo "📊 Processing scan results..."
           cd scan-results
           
-          # [Same Python script as before - truncated for space]
-          # ... (keeping the same processing logic)
+          # Initialize counters
+          CRITICAL=0
+          HIGH=0
+          MEDIUM=0
+          LOW=0
+          TOTAL=0
+          
+          # Create Python script for parsing results with detailed vulnerabilities
+          cat > parse_results.py << 'EOF'
+          import json
+          import sys
+          import os
+          
+          def parse_trivy_results(filename, scan_type="filesystem"):
+              """Parse Trivy results and extract detailed vulnerability information"""
+              counts = {'critical': 0, 'high': 0, 'medium': 0, 'low': 0}
+              vulnerabilities = []
+              
+              try:
+                  if not os.path.exists(filename) or os.path.getsize(filename) == 0:
+                      print(f"File {filename} is empty or does not exist")
+                      return counts, vulnerabilities
+                      
+                  with open(filename, 'r') as f:
+                      data = json.load(f)
+                  
+                  if isinstance(data, dict) and 'Results' in data:
+                      for result in data['Results']:
+                          target = result.get('Target', 'Unknown')
+                          
+                          if 'Vulnerabilities' in result and result['Vulnerabilities']:
+                              for vuln in result['Vulnerabilities']:
+                                  severity = vuln.get('Severity', '').lower()
+                                  if severity in counts:
+                                      counts[severity] += 1
+                                      
+                                      # Extract detailed vulnerability info
+                                      vulnerability_detail = {
+                                          'id': vuln.get('VulnerabilityID', 'N/A'),
+                                          'title': vuln.get('Title', 'No title'),
+                                          'description': (vuln.get('Description', 'No description')[:200] + '...') if len(vuln.get('Description', '')) > 200 else vuln.get('Description', 'No description'),
+                                          'severity': severity.upper(),
+                                          'package': vuln.get('PkgName', 'Unknown'),
+                                          'installed_version': vuln.get('InstalledVersion', 'Unknown'),
+                                          'fixed_version': vuln.get('FixedVersion', 'Not available'),
+                                          'target': target,
+                                          'source': 'Trivy',
+                                          'scan_type': scan_type,
+                                          'references': vuln.get('References', [])[:3]  # Limite à 3 références
+                                      }
+                                      
+                                      vulnerabilities.append(vulnerability_detail)
+                  
+                  print(f"Parsed {filename}: {counts} - {len(vulnerabilities)} detailed vulnerabilities")
+                  
+              except Exception as e:
+                  print(f"Error parsing {filename}: {e}")
+              
+              return counts, vulnerabilities
+          
+          def parse_snyk_results(filename):
+              """Parse Snyk results and extract detailed vulnerability information"""
+              counts = {'critical': 0, 'high': 0, 'medium': 0, 'low': 0}
+              vulnerabilities = []
+              
+              try:
+                  if not os.path.exists(filename) or os.path.getsize(filename) == 0:
+                      print(f"File {filename} is empty or does not exist")
+                      return counts, vulnerabilities
+                      
+                  with open(filename, 'r') as f:
+                      data = json.load(f)
+                  
+                  if isinstance(data, dict):
+                      if 'vulnerabilities' in data:
+                          for vuln in data['vulnerabilities']:
+                              severity = vuln.get('severity', '').lower()
+                              if severity in counts:
+                                  counts[severity] += 1
+                                  
+                                  # Extract detailed vulnerability info
+                                  vulnerability_detail = {
+                                      'id': vuln.get('id', 'N/A'),
+                                      'title': vuln.get('title', 'No title'),
+                                      'description': (vuln.get('description', 'No description')[:200] + '...') if len(vuln.get('description', '')) > 200 else vuln.get('description', 'No description'),
+                                      'severity': severity.upper(),
+                                      'package': vuln.get('packageName', 'Unknown'),
+                                      'installed_version': vuln.get('version', 'Unknown'),
+                                      'fixed_version': ', '.join(vuln.get('fixedIn', [])) if vuln.get('fixedIn') else 'Not available',
+                                      'target': vuln.get('from', ['Unknown'])[0] if vuln.get('from') else 'Unknown',
+                                      'source': 'Snyk',
+                                      'scan_type': 'dependency',
+                                      'references': [vuln.get('url')] if vuln.get('url') else []
+                                  }
+                                  
+                                  vulnerabilities.append(vulnerability_detail)
+                                  
+                      elif 'error' in data:
+                          print(f"Snyk error: {data['error']}")
+                  
+                  print(f"Parsed {filename}: {counts} - {len(vulnerabilities)} detailed vulnerabilities")
+                  
+              except Exception as e:
+                  print(f"Error parsing {filename}: {e}")
+              
+              return counts, vulnerabilities
+          
+          # Parse all result files
+          total_counts = {'critical': 0, 'high': 0, 'medium': 0, 'low': 0}
+          all_vulnerabilities = []
+          
+          # Parse Trivy results
+          trivy_files = [
+              ('trivy-filesystem.json', 'filesystem'),
+              ('trivy-secrets.json', 'secrets'), 
+              ('trivy-config.json', 'configuration')
+          ]
+          
+          for filename, scan_type in trivy_files:
+              counts, vulns = parse_trivy_results(filename, scan_type)
+              for severity in total_counts:
+                  total_counts[severity] += counts[severity]
+              all_vulnerabilities.extend(vulns)
+          
+          # Parse Snyk results
+          snyk_counts, snyk_vulns = parse_snyk_results('snyk-dependencies.json')
+          for severity in total_counts:
+              total_counts[severity] += snyk_counts[severity]
+          all_vulnerabilities.extend(snyk_vulns)
+          
+          # Sort vulnerabilities by severity (critical first)
+          severity_order = {'CRITICAL': 0, 'HIGH': 1, 'MEDIUM': 2, 'LOW': 3}
+          all_vulnerabilities.sort(key=lambda x: severity_order.get(x['severity'], 4))
+          
+          # Output results
+          total = sum(total_counts.values())
+          print(f"CRITICAL={total_counts['critical']}")
+          print(f"HIGH={total_counts['high']}")
+          print(f"MEDIUM={total_counts['medium']}")
+          print(f"LOW={total_counts['low']}")
+          print(f"TOTAL={total}")
+          print(f"DETAILED_VULNERABILITIES={len(all_vulnerabilities)}")
+          
+          # Save to environment file
+          with open(os.environ.get('GITHUB_ENV', '/dev/null'), 'a') as f:
+              f.write(f"CRITICAL_COUNT={total_counts['critical']}\n")
+              f.write(f"HIGH_COUNT={total_counts['high']}\n")
+              f.write(f"MEDIUM_COUNT={total_counts['medium']}\n")
+              f.write(f"LOW_COUNT={total_counts['low']}\n")
+              f.write(f"TOTAL_VULNERABILITIES={total}\n")
+          
+          # Save detailed vulnerabilities to JSON file
+          with open('detailed-vulnerabilities.json', 'w') as f:
+              json.dump(all_vulnerabilities, f, indent=2)
+          
+          print(f"💾 Saved {len(all_vulnerabilities)} detailed vulnerabilities to detailed-vulnerabilities.json")
+          EOF
+          
+          # Run Python script
+          python3 parse_results.py
+          
+          # Get the results from environment variables
+          CRITICAL=${CRITICAL_COUNT:-0}
+          HIGH=${HIGH_COUNT:-0}
+          MEDIUM=${MEDIUM_COUNT:-0}
+          LOW=${LOW_COUNT:-0}
+          TOTAL=${TOTAL_VULNERABILITIES:-0}
+          
+          # Set outputs
+          echo "critical=$CRITICAL" >> $GITHUB_OUTPUT
+          echo "high=$HIGH" >> $GITHUB_OUTPUT
+          echo "medium=$MEDIUM" >> $GITHUB_OUTPUT
+          echo "low=$LOW" >> $GITHUB_OUTPUT
+          echo "total-vulnerabilities=$TOTAL" >> $GITHUB_OUTPUT
+          
+          # Create summary JSON
+          cat > scan-summary.json << EOF
+          {
+            "scan_id": "${{ env.SCAN_ID }}",
+            "repository": "${{ env.REPO_NAME }}",
+            "scan_timestamp": "${{ env.SCAN_TIMESTAMP }}",
+            "files_scanned": ${{ env.FILES_SCANNED }},
+            "vulnerabilities": {
+              "critical": $CRITICAL,
+              "high": $HIGH,
+              "medium": $MEDIUM,
+              "low": $LOW,
+              "total": $TOTAL
+            },
+            "scan_depth": "${{ env.SCAN_DEPTH }}",
+            "tools_used": ["trivy", "snyk"],
+            "cache_performance": {
+              "trivy_cache_hit": "${{ steps.cache-trivy.outputs.cache-hit }}",
+              "node_cache_hit": "${{ steps.cache-node-global.outputs.cache-hit }}",
+              "scan_duration_optimized": true
+            }
+          }
+          EOF
           
           echo "📊 Results Summary:"
-          echo "  🔴 Critical: ${CRITICAL_COUNT:-0}"
-          echo "  🟠 High: ${HIGH_COUNT:-0}"  
-          echo "  🟡 Medium: ${MEDIUM_COUNT:-0}"
-          echo "  🟢 Low: ${LOW_COUNT:-0}"
-          echo "  📊 Total: ${TOTAL_VULNERABILITIES:-0} vulnerabilities"
+          echo "  🔴 Critical: $CRITICAL"
+          echo "  🟠 High: $HIGH"  
+          echo "  🟡 Medium: $MEDIUM"
+          echo "  🟢 Low: $LOW"
+          echo "  📊 Total: $TOTAL vulnerabilities"
           echo "  📁 Files scanned: ${{ env.FILES_SCANNED }}"
-          echo "⚡ Tools used:"
-          echo "  Trivy: ${{ steps.install-tools.outputs.trivy-ok }}"
-          echo "  Snyk: ${{ steps.install-tools.outputs.snyk-ok }}"
-          echo "  Cache hit: ${{ steps.install-tools.outputs.cache-hit }}"
+          
+          # Show cache performance
+          echo "⚡ Cache Performance:"
+          echo "  🔧 Trivy cached: ${{ steps.cache-trivy.outputs.cache-hit }}"
+          echo "  🟢 Node.js cached: ${{ steps.cache-node-global.outputs.cache-hit }}"
+          
+          # Show count of detailed vulnerabilities found
+          if [ -f "detailed-vulnerabilities.json" ]; then
+            DETAILED_COUNT=$(python3 -c "import json; print(len(json.load(open('detailed-vulnerabilities.json'))))" 2>/dev/null || echo "0")
+            echo "  📋 Detailed vulnerabilities: $DETAILED_COUNT"
+          fi
 
-      # ===============================
-      # RESULTS SENDING (same as before)
-      # ===============================
       - name: 📤 Send Results to Backend
         id: send-results
         if: always()
         run: |
           echo "📤 Sending results to callback URL..."
-          # [Same callback logic as before]
-          echo "✅ Results processed and sent"
+              
+          # Calculate scan duration
+          SCAN_END_TIME=$(date +%s)
+          DURATION=$((SCAN_END_TIME - SCAN_START_TIME))
+           
+          # Determine final status
+          FINAL_STATUS="completed"
+          if [ "${{ job.status }}" = "failure" ] || [ "${{ job.status }}" = "cancelled" ]; then
+            FINAL_STATUS="failed"
+          fi
+              
+          # Get vulnerability counts (with defaults)
+          CRITICAL_COUNT=${CRITICAL_COUNT:-0}
+          HIGH_COUNT=${HIGH_COUNT:-0}
+          MEDIUM_COUNT=${MEDIUM_COUNT:-0}
+          LOW_COUNT=${LOW_COUNT:-0}
+          TOTAL_VULNERABILITIES=${TOTAL_VULNERABILITIES:-0}
+             
+          # Read detailed vulnerabilities if file exists
+          DETAILED_VULNS="[]"
+          if [ -f "scan-results/detailed-vulnerabilities.json" ]; then
+            DETAILED_VULNS=$(cat scan-results/detailed-vulnerabilities.json | jq -c '.')
+            echo "📋 Found $(echo "$DETAILED_VULNS" | jq length) detailed vulnerabilities"
+          elif [ -f "detailed-vulnerabilities.json" ]; then
+            DETAILED_VULNS=$(cat detailed-vulnerabilities.json | jq -c '.')
+            echo "📋 Found $(echo "$DETAILED_VULNS" | jq length) detailed vulnerabilities"
+          fi
+              
+          # Create callback payload with detailed vulnerabilities and cache info
+          jq -n \
+            --arg scan_id "${{ env.SCAN_ID }}" \
+            --arg status "$FINAL_STATUS" \
+            --arg repository "${{ env.REPO_NAME }}" \
+            --arg github_url "${{ env.TARGET_REPO }}" \
+            --argjson duration "$DURATION" \
+            --argjson files_scanned "${{ env.FILES_SCANNED }}" \
+            --arg start_time "${{ env.SCAN_TIMESTAMP }}" \
+            --arg completed_at "$(date -u '+%Y-%m-%d %H:%M:%S UTC')" \
+            --argjson critical "$CRITICAL_COUNT" \
+            --argjson high "$HIGH_COUNT" \
+            --argjson medium "$MEDIUM_COUNT" \
+            --argjson low "$LOW_COUNT" \
+            --argjson total "$TOTAL_VULNERABILITIES" \
+            --arg scan_timestamp "${{ env.SCAN_TIMESTAMP }}" \
+            --arg scan_depth "${{ env.SCAN_DEPTH }}" \
+            --argjson detailed_vulnerabilities "$DETAILED_VULNS" \
+            --arg trivy_cached "${{ steps.cache-trivy.outputs.cache-hit }}" \
+            --arg node_cached "${{ steps.cache-node-global.outputs.cache-hit }}" \
+            '{
+              scan_id: $scan_id,
+              status: $status,
+              repository: $repository,
+              github_url: $github_url,
+              duration: $duration,
+              files_scanned: $files_scanned,
+              start_time: $start_time,
+              completed_at: $completed_at,
+              results: {
+                critical: $critical,
+                high: $high,
+                medium: $medium,
+                low: $low,
+                total: $total,
+                scan_timestamp: $scan_timestamp,
+                scan_depth: $scan_depth,
+                tools_used: ["trivy", "snyk"],
+                detailed_vulnerabilities: $detailed_vulnerabilities,
+                cache_performance: {
+                  trivy_cache_hit: ($trivy_cached == "true"),
+                  node_cache_hit: ($node_cached == "true"),
+                  performance_optimized: true
+                }
+              }
+            }' > callback-payload.json
+              
+          echo "📋 Callback payload created with $(echo "$DETAILED_VULNS" | jq -r 'length') detailed vulnerabilities"
+          echo "⚡ Cache hits - Trivy: ${{ steps.cache-trivy.outputs.cache-hit }}, Node: ${{ steps.cache-node-global.outputs.cache-hit }}"
+              
+          # Show summary of payload (without showing full detailed vulnerabilities to avoid log spam)
+          echo "📋 Payload summary:"
+          cat callback-payload.json | jq 'del(.results.detailed_vulnerabilities) + {detailed_vulnerabilities_count: (.results.detailed_vulnerabilities | length)}'
+              
+          # Validate JSON before sending
+          if ! jq empty callback-payload.json 2>/dev/null; then
+            echo "❌ Generated JSON is invalid!"
+            cat callback-payload.json | head -20
+            exit 1
+          fi
+              
+          # Send to callback URL with retries
+          CALLBACK_SUCCESS=false
+          for attempt in 1 2 3; do
+            echo "📞 Attempt $attempt: Sending to ${{ env.CALLBACK_URL }}"
+            
+            HTTP_STATUS=$(curl -s -o callback-response.json -w "%{http_code}" \
+              -X POST \
+              -H "Content-Type: application/json" \
+              -H "User-Agent: GitHub-Actions-Security-Scanner/1.0" \
+              -H "Accept: application/json" \
+              --max-time 60 \
+              --retry 0 \
+              -d @callback-payload.json \
+              "${{ env.CALLBACK_URL }}")
+            
+            echo "Response status: $HTTP_STATUS"
+            
+            if [ "$HTTP_STATUS" = "200" ] || [ "$HTTP_STATUS" = "201" ] || [ "$HTTP_STATUS" = "202" ]; then
+              echo "✅ Callback successful!"
+              CALLBACK_SUCCESS=true
+              if [ -f callback-response.json ]; then
+                echo "Response body:"
+                cat callback-response.json
+              fi
+              break
+            else
+              echo "⚠️ Callback failed with status $HTTP_STATUS"
+              if [ -f callback-response.json ]; then
+                echo "Response body:"
+                cat callback-response.json
+              fi
+              
+              if [ $attempt -lt 3 ]; then
+                echo "Retrying in 10 seconds..."
+                sleep 10
+              fi
+            fi
+          done
+              
+          if [ "$CALLBACK_SUCCESS" = "false" ]; then
+            echo "❌ All callback attempts failed"
+            echo "callback-status=failed" >> $GITHUB_OUTPUT
+          else
+            echo "callback-status=success" >> $GITHUB_OUTPUT
+          fi
+              
+          # Set outputs
+          echo "duration=$DURATION" >> $GITHUB_OUTPUT
+          echo "final-status=$FINAL_STATUS" >> $GITHUB_OUTPUT
+      
           
       - name: 📋 Final Status
         id: final-status
