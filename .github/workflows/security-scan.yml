@@ -128,6 +128,55 @@ jobs:
             return 1
           }
           
+          # Install Snyk for dependency scanning
+          install_snyk() {
+            echo "📦 Installing Snyk..."
+            
+            # Method 1: Try to restore from cached node_modules
+            if [ -f ~/.local/lib/node_modules/snyk/bin/snyk ]; then
+              echo "🔗 Creating symlink from cached node_modules..."
+              ln -sf ~/.local/lib/node_modules/snyk/bin/snyk ~/.local/bin/snyk
+              chmod +x ~/.local/bin/snyk
+            fi
+            
+            # Test if it works
+            if [ -f ~/.local/bin/snyk ] && ~/.local/bin/snyk --version >/dev/null 2>&1; then
+              echo "✅ Snyk restored from cache"
+              return 0
+            else
+              # Method 2: Fresh installation
+              echo "📦 Installing Snyk fresh..."
+              mkdir -p ~/.local/lib/node_modules
+              npm install --prefix ~/.local snyk@latest >/dev/null 2>&1
+              
+              # Create direct symlink
+              if [ -f ~/.local/lib/node_modules/snyk/bin/snyk ]; then
+                ln -sf ~/.local/lib/node_modules/snyk/bin/snyk ~/.local/bin/snyk
+                chmod +x ~/.local/bin/snyk
+              fi
+              
+              # Test again
+              if [ -f ~/.local/bin/snyk ] && ~/.local/bin/snyk --version >/dev/null 2>&1; then
+                echo "✅ Snyk installed fresh"
+                return 0
+              else
+                # Method 3: Global fallback
+                echo "📦 Trying global Snyk installation..."
+                npm install -g snyk@latest >/dev/null 2>&1
+                
+                # Create symlink to global installation
+                if which snyk >/dev/null 2>&1; then
+                  ln -sf $(which snyk) ~/.local/bin/snyk
+                  echo "✅ Snyk installed globally and linked"
+                  return 0
+                else
+                  echo "⚠️ Snyk installation failed"
+                  return 1
+                fi
+              fi
+            fi
+          }
+
           # Robust Semgrep installation with fallbacks
           install_semgrep() {
             echo "📦 Installing Semgrep..."
@@ -166,6 +215,7 @@ jobs:
             echo "❌ All Semgrep installation methods failed"
             return 1
           }
+
           
           # Install tools with improved logic
           install_tool() {
@@ -196,12 +246,18 @@ jobs:
           install_tool "Trivy" "install_trivy" "~/.local/bin/trivy --version" &
           TRIVY_PID=$!
           
+          install_tool "Snyk" "install_snyk" "~/.local/bin/snyk --version" &
+          SNYK_PID=$!
+          
           install_tool "Semgrep" "install_semgrep" "~/.local/bin/semgrep --version" &
           SEMGREP_PID=$!
           
           # Wait for installations
           wait $TRIVY_PID
           TRIVY_OK=$?
+          
+          wait $SNYK_PID
+          SNYK_OK=$?
           
           wait $SEMGREP_PID
           SEMGREP_OK=$?
@@ -214,10 +270,12 @@ jobs:
           
           # Set outputs
           echo "trivy-ok=$([[ $TRIVY_OK -eq 0 ]] && echo true || echo false)" >> $GITHUB_OUTPUT
+          echo "snyk-ok=$([[ $SNYK_OK -eq 0 ]] && echo true || echo false)" >> $GITHUB_OUTPUT
           echo "semgrep-ok=$([[ $SEMGREP_OK -eq 0 ]] && echo true || echo false)" >> $GITHUB_OUTPUT
           
           echo "📊 Tool Installation Status:"
           echo "  Trivy: $([[ $TRIVY_OK -eq 0 ]] && echo "✅" || echo "❌")"
+          echo "  Snyk: $([[ $SNYK_OK -eq 0 ]] && echo "✅" || echo "❌")"  
           echo "  Semgrep: $([[ $SEMGREP_OK -eq 0 ]] && echo "✅" || echo "❌")"
 
       # ========================================
@@ -285,7 +343,7 @@ jobs:
           echo "🔍 Detected project types: ${PROJECT_TYPES:-none}"
 
       # ========================================
-      # PARALLEL SECURITY SCANS
+      # COMPREHENSIVE SECURITY SCANS
       # ========================================
       - name: 🔍 Comprehensive Vulnerability Scan
         id: trivy-comprehensive
@@ -294,61 +352,29 @@ jobs:
           echo "🔍 Running comprehensive Trivy scan..."
           cd "${{ env.REPO_DIR }}"
           
-          # Enhanced Trivy scan with multiple scanners
+          # Filesystem vulnerabilities
           ~/.local/bin/trivy fs . \
             --format json \
-            --output ../scan-results/trivy-vulnerabilities.json \
+            --output ../scan-results/trivy-filesystem.json \
             --severity CRITICAL,HIGH,MEDIUM,LOW \
-            --scanners vuln,config,secret \
+            --scanners vuln \
             --timeout 15m \
             --parallel 4 \
             --quiet \
             --exit-code 0 || {
-              echo "⚠️ Trivy scan completed with warnings"
-              echo '{"Results": []}' > ../scan-results/trivy-vulnerabilities.json
+              echo "⚠️ Trivy filesystem scan completed with warnings"
+              echo '{"Results": []}' > ../scan-results/trivy-filesystem.json
             }
           
-          echo "✅ Comprehensive vulnerability scan completed"
-
-      - name: 🎯 Advanced Static Analysis
-        id: semgrep-analysis
-        if: steps.install-tools.outputs.semgrep-ok == 'true'
-        run: |
-          echo "🎯 Running advanced static analysis..."
-          cd "${{ env.REPO_DIR }}"
-          
-          # Intelligent ruleset selection based on project types
-          RULESETS="auto"
-          case "${{ env.PROJECT_TYPES }}" in
-            *nodejs*) RULESETS="$RULESETS javascript typescript" ;;
-            *python*) RULESETS="$RULESETS python" ;;
-            *java*) RULESETS="$RULESETS java" ;;
-            *golang*) RULESETS="$RULESETS go" ;;
-          esac
-          
-          # Run Semgrep with dynamic rulesets
-          ~/.local/bin/semgrep \
-            --config=$RULESETS \
-            --json \
-            --output=../scan-results/semgrep-analysis.json \
-            --timeout=300 \
-            --max-target-bytes=1000000 \
-            --quiet \
-            . || {
-              echo "⚠️ Semgrep analysis completed with findings"
-              echo '{"results": []}' > ../scan-results/semgrep-analysis.json
-            }
-          
-          echo "✅ Advanced static analysis completed"
+          echo "✅ Trivy vulnerability scan completed"
 
       - name: 🔐 Enhanced Secret Detection
-        id: secret-scan
+        id: trivy-secrets
         if: steps.install-tools.outputs.trivy-ok == 'true'
         run: |
           echo "🔐 Enhanced secret detection..."
           cd "${{ env.REPO_DIR }}"
           
-          # Multi-layer secret detection
           ~/.local/bin/trivy fs . \
             --scanners secret \
             --format json \
@@ -362,6 +388,101 @@ jobs:
             }
           
           echo "✅ Enhanced secret detection completed"
+
+      - name: ⚙️ Configuration Security Scan
+        id: trivy-config
+        if: steps.install-tools.outputs.trivy-ok == 'true'
+        run: |
+          echo "⚙️ Scanning configuration files..."
+          cd "${{ env.REPO_DIR }}"
+          
+          ~/.local/bin/trivy fs . \
+            --scanners config \
+            --format json \
+            --output ../scan-results/trivy-config.json \
+            --timeout 5m \
+            --quiet \
+            --exit-code 0 || {
+              echo "⚠️ Config scan completed with findings"
+              echo '{"Results": []}' > ../scan-results/trivy-config.json
+            }
+          
+          echo "✅ Configuration scan completed"
+
+      - name: 🔐 Configure Snyk Authentication
+        if: steps.install-tools.outputs.snyk-ok == 'true'
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        run: |
+          if [ -n "$SNYK_TOKEN" ]; then
+            ~/.local/bin/snyk auth "$SNYK_TOKEN"
+            echo "✅ Snyk authenticated"
+          else
+            echo "⚠️ SNYK_TOKEN not provided - Snyk scans will be limited"
+          fi
+
+      - name: 📦 Dependency Security Scan (Snyk)
+        id: snyk-dependencies
+        if: steps.install-tools.outputs.snyk-ok == 'true'
+        continue-on-error: true
+        run: |
+          echo "📦 Scanning dependencies with Snyk..."
+          cd "${{ env.REPO_DIR }}"
+          
+          # Create empty results file in case Snyk fails
+          echo '{"vulnerabilities": []}' > ../scan-results/snyk-dependencies.json
+          
+          # Snyk test with JSON output
+          ~/.local/bin/snyk test \
+            --json \
+            --all-projects \
+            --detection-depth=3 \
+            --severity-threshold=low > ../scan-results/snyk-dependencies.json 2>/dev/null || {
+              echo "⚠️ Snyk scan completed with findings or errors"
+              # If Snyk fails, ensure we have a valid JSON structure
+              if [ ! -s ../scan-results/snyk-dependencies.json ]; then
+                echo '{"vulnerabilities": []}' > ../scan-results/snyk-dependencies.json
+              fi
+            }
+          
+          echo "✅ Dependency scan completed"
+
+      - name: 🎯 Static Analysis (Semgrep)
+        id: semgrep-analysis
+        if: steps.install-tools.outputs.semgrep-ok == 'true'
+        continue-on-error: true
+        run: |
+          echo "🎯 Running static analysis..."
+          cd "${{ env.REPO_DIR }}"
+          
+          # Create empty results file
+          echo '{"results": []}' > ../scan-results/semgrep-analysis.json
+          
+          # Intelligent ruleset selection based on project types
+          RULESETS="auto"
+          case "${{ env.PROJECT_TYPES }}" in
+            *nodejs*) RULESETS="$RULESETS p/javascript p/typescript" ;;
+            *python*) RULESETS="$RULESETS p/python" ;;
+            *java*) RULESETS="$RULESETS p/java" ;;
+            *golang*) RULESETS="$RULESETS p/golang" ;;
+          esac
+          
+          # Run Semgrep with dynamic rulesets
+          ~/.local/bin/semgrep \
+            --config=$RULESETS \
+            --json \
+            --output=../scan-results/semgrep-analysis.json \
+            --timeout=300 \
+            --max-target-bytes=1000000 \
+            --quiet \
+            . || {
+              echo "⚠️ Semgrep analysis completed with findings"
+              if [ ! -s ../scan-results/semgrep-analysis.json ]; then
+                echo '{"results": []}' > ../scan-results/semgrep-analysis.json
+              fi
+            }
+          
+          echo "✅ Static analysis completed"
 
       # ========================================
       # INTELLIGENT RESULT PROCESSING
@@ -716,7 +837,6 @@ jobs:
             response.json
           retention-days: 30
           if-no-files-found: warn
-
 
 # # 🛡️ DevSecOps Security Scanning Pipeline - Cached Version
 
