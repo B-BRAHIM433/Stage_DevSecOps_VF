@@ -1,4 +1,4 @@
-# 🛡️ DevSecOps Security Scanning Pipeline - Corrected Version
+# 🛡️ DevSecOps Security Scanning Pipeline - Cached Version
 
 name: 🔒 Security Scanner
 
@@ -17,8 +17,11 @@ on:
         description: 'Callback URL for results'
         required: true
         type: string
+      timestamp:
+        description: 'Horodatage du déclenchement'
+        required: false
       scan_depth:
-        description: 'Scan depth level'
+        description: 'Niveau de scan (quick, standard, deep)'
         required: false
         default: 'standard'
         type: choice
@@ -32,6 +35,7 @@ env:
   CALLBACK_URL: ${{ github.event.inputs.callback_url }}
   TARGET_REPO: ${{ github.event.inputs.target_repo }}
   SCAN_DEPTH: ${{ github.event.inputs.scan_depth }}
+  SCAN_TIMESTAMP: ${{ github.event.inputs.timestamp }}
   # Tool versions
   TRIVY_VERSION: "0.48.3"
   NODE_VERSION: "18"
@@ -89,68 +93,164 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
 
       # ===============================
-      # TOOL INSTALLATION
+      # ROBUST TOOL INSTALLATION WITH FALLBACK
       # ===============================
-      - name: 🔧 Install Trivy
-        id: install-trivy
+      - name: 📅 Get Date for Cache Key
+        id: get-date
+        run: echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+
+      - name: 📦 Cache Security Tools
+        id: cache-tools
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.local/bin/trivy
+            ~/.local/bin/snyk
+            ~/.cache/trivy
+            ~/.local/lib/node_modules/snyk
+          key: security-tools-v2-${{ env.TRIVY_VERSION }}-node${{ env.NODE_VERSION }}-${{ steps.get-date.outputs.date }}
+          restore-keys: |
+            security-tools-v2-${{ env.TRIVY_VERSION }}-node${{ env.NODE_VERSION }}-
+            security-tools-v2-${{ env.TRIVY_VERSION }}-
+
+      - name: 🔧 Install/Verify Security Tools
+        id: install-tools
         run: |
-          echo "📦 Installing Trivy v${{ env.TRIVY_VERSION }}..."
+          echo "🔧 Installing/Verifying security tools..."
           
           # Create local bin directory
           mkdir -p ~/.local/bin
           echo "$HOME/.local/bin" >> $GITHUB_PATH
           
-          # Download and install Trivy
-          wget -qO- "https://github.com/aquasecurity/trivy/releases/download/v${{ env.TRIVY_VERSION }}/trivy_${{ env.TRIVY_VERSION }}_Linux-64bit.tar.gz" | \
-            tar -xzf - -C ~/.local/bin
-          chmod +x ~/.local/bin/trivy
+          # Initialize flags
+          TRIVY_OK=false
+          SNYK_OK=false
           
-          # Verify installation
-          if ~/.local/bin/trivy --version >/dev/null 2>&1; then
-            echo "✅ Trivy installed successfully"
-            echo "trivy-ok=true" >> $GITHUB_OUTPUT
+          # Check/Install Trivy
+          echo "📋 Checking Trivy..."
+          if [ -f ~/.local/bin/trivy ] && ~/.local/bin/trivy --version >/dev/null 2>&1; then
+            echo "✅ Trivy found in cache"
+            TRIVY_OK=true
           else
-            echo "❌ Trivy installation failed"
-            echo "trivy-ok=false" >> $GITHUB_OUTPUT
+            echo "📦 Installing Trivy v${{ env.TRIVY_VERSION }}..."
+            wget -qO- "https://github.com/aquasecurity/trivy/releases/download/v${{ env.TRIVY_VERSION }}/trivy_${{ env.TRIVY_VERSION }}_Linux-64bit.tar.gz" | tar -xzf - -C ~/.local/bin
+            chmod +x ~/.local/bin/trivy
+            if ~/.local/bin/trivy --version >/dev/null 2>&1; then
+              TRIVY_OK=true
+              echo "✅ Trivy installed successfully"
+            else
+              echo "❌ Trivy installation failed"
+            fi
+          fi
+          
+          # Check/Install Snyk
+          echo "📋 Checking Snyk..."
+          if [ -f ~/.local/bin/snyk ] && ~/.local/bin/snyk --version >/dev/null 2>&1; then
+            echo "✅ Snyk found in cache"
+            SNYK_OK=true
+          else
+            echo "📦 Installing Snyk..."
+            
+            # Method 1: Try to restore from node_modules cache
+            if [ -f ~/.local/lib/node_modules/snyk/bin/snyk ]; then
+              echo "🔗 Creating symlink from cached node_modules..."
+              ln -sf ~/.local/lib/node_modules/snyk/bin/snyk ~/.local/bin/snyk
+              chmod +x ~/.local/bin/snyk
+            fi
+            
+            # Test if it works
+            if [ -f ~/.local/bin/snyk ] && ~/.local/bin/snyk --version >/dev/null 2>&1; then
+              SNYK_OK=true
+              echo "✅ Snyk restored from cache"
+            else
+              # Method 2: Fresh installation
+              echo "📦 Installing Snyk fresh..."
+              mkdir -p ~/.local/lib/node_modules
+              npm install --prefix ~/.local snyk@latest >/dev/null 2>&1
+              
+              # Create direct symlink
+              if [ -f ~/.local/lib/node_modules/snyk/bin/snyk ]; then
+                ln -sf ~/.local/lib/node_modules/snyk/bin/snyk ~/.local/bin/snyk
+                chmod +x ~/.local/bin/snyk
+              fi
+              
+              # Test again
+              if [ -f ~/.local/bin/snyk ] && ~/.local/bin/snyk --version >/dev/null 2>&1; then
+                SNYK_OK=true
+                echo "✅ Snyk installed fresh"
+              else
+                # Method 3: Global fallback
+                echo "📦 Trying global Snyk installation..."
+                npm install -g snyk@latest >/dev/null 2>&1
+                
+                # Create symlink to global installation
+                if which snyk >/dev/null 2>&1; then
+                  ln -sf $(which snyk) ~/.local/bin/snyk
+                  SNYK_OK=true
+                  echo "✅ Snyk installed globally and linked"
+                else
+                  echo "⚠️ Snyk installation failed, will continue without Snyk"
+                fi
+              fi
+            fi
+          fi
+          
+          # Update Trivy database
+          if [ "$TRIVY_OK" = true ]; then
+            echo "🔄 Updating Trivy vulnerability database..."
+            ~/.local/bin/trivy image --download-db-only >/dev/null 2>&1 || echo "⚠️ Trivy DB update failed, will use cached DB"
+          fi
+          
+          # Set outputs
+          echo "trivy-ok=$TRIVY_OK" >> $GITHUB_OUTPUT
+          echo "snyk-ok=$SNYK_OK" >> $GITHUB_OUTPUT
+          echo "cache-hit=${{ steps.cache-tools.outputs.cache-hit }}" >> $GITHUB_OUTPUT
+          
+          echo "📊 Tool Status:"
+          echo "  Trivy: $TRIVY_OK"
+          echo "  Snyk: $SNYK_OK"
+          echo "  Cache Hit: ${{ steps.cache-tools.outputs.cache-hit }}"
+
+      # ===============================
+      # VERIFY TOOLS
+      # ===============================
+      - name: ✅ Verify Tool Installations
+        run: |
+          echo "🔍 Final tool verification..."
+          echo "⚡ Cache Performance:"
+          echo "  🔧 Tools cache hit: ${{ steps.install-tools.outputs.cache-hit }}"
+          echo "  🔧 Trivy OK: ${{ steps.install-tools.outputs.trivy-ok }}"
+          echo "  🔧 Snyk OK: ${{ steps.install-tools.outputs.snyk-ok }}"
+          
+          echo ""
+          echo "📋 Tool Versions:"
+          
+          # Verify Trivy
+          if [ "${{ steps.install-tools.outputs.trivy-ok }}" = "true" ]; then
+            echo "Trivy: $(~/.local/bin/trivy --version | head -1)"
+          else
+            echo "❌ Trivy not available - filesystem/config/secret scans will be skipped"
+          fi
+          
+          # Verify Snyk
+          if [ "${{ steps.install-tools.outputs.snyk-ok }}" = "true" ]; then
+            echo "Snyk: $(~/.local/bin/snyk --version)"
+          else
+            echo "⚠️ Snyk not available - dependency scans will be skipped"
+          fi
+          
+          echo "Node.js: $(node --version)"
+          echo "Python: $(python3 --version)"
+          
+          # Check if at least one security tool is available
+          if [ "${{ steps.install-tools.outputs.trivy-ok }}" = "false" ]; then
+            echo "❌ No security scanning tools available!"
             exit 1
           fi
           
-          # Update vulnerability database
-          echo "🔄 Updating Trivy database..."
-          ~/.local/bin/trivy image --download-db-only >/dev/null 2>&1 || echo "⚠️ Trivy DB update failed, using cached DB"
-
-      - name: 🔧 Install Snyk
-        id: install-snyk
-        run: |
-          echo "📦 Installing Snyk..."
-          
-          # Install Snyk globally
-          npm install -g snyk
-          
-          # Verify installation
-          if snyk --version >/dev/null 2>&1; then
-            echo "✅ Snyk installed successfully"
-            echo "snyk-ok=true" >> $GITHUB_OUTPUT
-            echo "snyk-version=$(snyk --version)" >> $GITHUB_OUTPUT
-          else
-            echo "❌ Snyk installation failed"
-            echo "snyk-ok=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: ✅ Verify Tool Installations
-        run: |
-          echo "🔍 Tool Verification:"
-          echo "Trivy: $(~/.local/bin/trivy --version | head -1)"
-          if [ "${{ steps.install-snyk.outputs.snyk-ok }}" = "true" ]; then
-            echo "Snyk: $(snyk --version)"
-          else
-            echo "Snyk: Not available"
-          fi
-          echo "Node.js: $(node --version)"
-          echo "Python: $(python3 --version)"
+          echo "✅ Tool verification completed"
 
       # ===============================
       # REPOSITORY CLONING
@@ -191,46 +291,46 @@ jobs:
           echo "FILES_SCANNED=$FILE_COUNT" >> $GITHUB_ENV
           
           echo "✅ Repository cloned: $FILE_COUNT files"
-          echo "📋 Package files found:"
-          find . -name "package.json" -o -name "requirements.txt" -o -name "*.csproj" -o -name "pom.xml" -o -name "go.mod" | head -10
+          echo "repository=$REPO_NAME" >> $GITHUB_OUTPUT
+          echo "directory=$REPO_DIR" >> $GITHUB_OUTPUT
+          echo "files-count=$FILE_COUNT" >> $GITHUB_OUTPUT
 
       # ===============================
-      # SNYK AUTHENTICATION
+      # SNYK CONFIGURATION
       # ===============================
       - name: 🔐 Configure Snyk Authentication
-        id: snyk-auth
-        if: steps.install-snyk.outputs.snyk-ok == 'true'
+        if: steps.install-tools.outputs.snyk-ok == 'true' && (env.SCAN_DEPTH == 'comprehensive' || env.SCAN_DEPTH == 'standard')
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         run: |
-          echo "🔐 Configuring Snyk authentication..."
-          
-          if [ -n "${{ secrets.SNYK_TOKEN }}" ]; then
-            echo "✅ Snyk token found, authenticating..."
-            snyk auth ${{ secrets.SNYK_TOKEN }}
-            echo "snyk-authenticated=true" >> $GITHUB_OUTPUT
+          if [ -n "$SNYK_TOKEN" ]; then
+            ~/.local/bin/snyk auth "$SNYK_TOKEN"
+            echo "✅ Snyk authenticated"
           else
-            echo "⚠️ No SNYK_TOKEN secret found"
-            echo "ℹ️ Snyk will run in unauthenticated mode (limited scans)"
-            echo "snyk-authenticated=false" >> $GITHUB_OUTPUT
+            echo "⚠️ SNYK_TOKEN not provided - some scans will be limited"
           fi
 
       # ===============================
-      # SECURITY SCANS
+      # SECURITY SCANS (with conditional execution)
       # ===============================
-      - name: 🔍 Filesystem Security Scan (Trivy)
+      - name: 🔍 Filesystem Security Scan
         id: trivy-fs
-        if: steps.install-trivy.outputs.trivy-ok == 'true'
+        if: steps.install-tools.outputs.trivy-ok == 'true'
         continue-on-error: true
         run: |
           echo "🔍 Running Trivy filesystem scan..."
           cd "${{ env.REPO_DIR }}"
           
+          # Ensure output directory exists
           mkdir -p ../scan-results
           
+          # Trivy filesystem scan with JSON output
           ~/.local/bin/trivy fs . \
             --format json \
             --output ../scan-results/trivy-filesystem.json \
             --severity CRITICAL,HIGH,MEDIUM,LOW \
             --timeout 10m \
+            --quiet \
             --exit-code 0 || {
               echo "⚠️ Trivy filesystem scan had issues, but continuing..."
               echo '{"Results": []}' > ../scan-results/trivy-filesystem.json
@@ -238,9 +338,9 @@ jobs:
           
           echo "✅ Filesystem scan completed"
 
-      - name: 🔐 Secret Detection (Trivy)
+      - name: 🔐 Secret Detection
         id: trivy-secrets
-        if: steps.install-trivy.outputs.trivy-ok == 'true'
+        if: steps.install-tools.outputs.trivy-ok == 'true'
         continue-on-error: true
         run: |
           echo "🔐 Scanning for secrets..."
@@ -251,6 +351,7 @@ jobs:
             --format json \
             --output ../scan-results/trivy-secrets.json \
             --timeout 5m \
+            --quiet \
             --exit-code 0 || {
               echo "⚠️ Secret scan had issues, but continuing..."
               echo '{"Results": []}' > ../scan-results/trivy-secrets.json
@@ -258,9 +359,9 @@ jobs:
           
           echo "✅ Secret detection completed"
 
-      - name: ⚙️ Configuration Security Scan (Trivy)
+      - name: ⚙️ Configuration Security Scan
         id: trivy-config
-        if: steps.install-trivy.outputs.trivy-ok == 'true'
+        if: steps.install-tools.outputs.trivy-ok == 'true'
         continue-on-error: true
         run: |
           echo "⚙️ Scanning configuration files..."
@@ -271,6 +372,7 @@ jobs:
             --format json \
             --output ../scan-results/trivy-config.json \
             --timeout 5m \
+            --quiet \
             --exit-code 0 || {
               echo "⚠️ Config scan had issues, but continuing..."
               echo '{"Results": []}' > ../scan-results/trivy-config.json
@@ -278,96 +380,40 @@ jobs:
           
           echo "✅ Configuration scan completed"
 
-      - name: 📦 Dependency Security Scan (Snyk)
+      - name: 📦 Dependency Security Scan
         id: snyk-dependencies
-        if: steps.install-snyk.outputs.snyk-ok == 'true'
+        if: steps.install-tools.outputs.snyk-ok == 'true' && env.SKIP_SNYK != 'true'
         continue-on-error: true
         run: |
-          echo "📦 Running Snyk dependency scan..."
+          echo "📦 Scanning dependencies with Snyk..."
           cd "${{ env.REPO_DIR }}"
           
-          mkdir -p ../scan-results
+          # Create empty results file in case Snyk fails
+          echo '{"vulnerabilities": []}' > ../scan-results/snyk-dependencies.json
           
-          # Check for supported package managers
-          echo "🔍 Checking for package files..."
-          HAS_PACKAGE_FILES=$(find . -name "package.json" -o -name "requirements*.txt" -o -name "Pipfile" -o -name "pyproject.toml" -o -name "*.csproj" -o -name "pom.xml" -o -name "build.gradle" -o -name "go.mod" | head -1)
+          # Snyk test with JSON output
+          ~/.local/bin/snyk test \
+            --json \
+            --all-projects \
+            --detection-depth=3 \
+            --severity-threshold=low > ../scan-results/snyk-dependencies.json 2>/dev/null || {
+              echo "⚠️ Snyk scan completed with findings or errors"
+              # If Snyk fails, ensure we have a valid JSON structure
+              if [ ! -s ../scan-results/snyk-dependencies.json ]; then
+                echo '{"vulnerabilities": []}' > ../scan-results/snyk-dependencies.json
+              fi
+            }
           
-          if [ -z "$HAS_PACKAGE_FILES" ]; then
-            echo "⚠️ No supported package files found. Creating empty Snyk results."
-            echo '{"vulnerabilities": [], "note": "No supported package files found"}' > ../scan-results/snyk-dependencies.json
-            echo "skipped=true" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-          
-          echo "📋 Found supported package files. Running Snyk scan..."
-          
-          # Run Snyk with proper error handling
-          set +e
-          if [ "${{ steps.snyk-auth.outputs.snyk-authenticated }}" = "true" ]; then
-            echo "🔐 Running authenticated Snyk scan..."
-            snyk test --json --all-projects > ../scan-results/snyk-dependencies.json 2>../scan-results/snyk-error.log
-          else
-            echo "🔓 Running unauthenticated Snyk scan..."
-            snyk test --json --all-projects > ../scan-results/snyk-dependencies.json 2>../scan-results/snyk-error.log
-          fi
-          
-          SNYK_EXIT_CODE=$?
-          set -e
-          
-          # Handle Snyk exit codes
-          if [ $SNYK_EXIT_CODE -eq 0 ]; then
-            echo "✅ Snyk scan completed successfully (no vulnerabilities found)"
-          elif [ $SNYK_EXIT_CODE -eq 1 ]; then
-            echo "⚠️ Snyk scan completed with vulnerabilities found"
-          else
-            echo "❌ Snyk scan failed with exit code $SNYK_EXIT_CODE"
-            # Create valid JSON even if scan failed
-            if [ ! -s ../scan-results/snyk-dependencies.json ]; then
-              echo '{"vulnerabilities": [], "error": "Snyk scan failed"}' > ../scan-results/snyk-dependencies.json
-            fi
-          fi
-          
-          echo "snyk-exit-code=$SNYK_EXIT_CODE" >> $GITHUB_OUTPUT
+          echo "✅ Dependency scan completed"
 
       # ===============================
-      # DEBUG SCAN RESULTS
+      # CREATE EMPTY RESULTS FOR SKIPPED SCANS
       # ===============================
-      - name: 🔍 Debug Scan Results
-        if: always()
-        run: |
-          echo "🔍 Debugging scan results..."
-          cd scan-results
-          
-          for file in trivy-filesystem.json trivy-secrets.json trivy-config.json snyk-dependencies.json; do
-            if [ -f "$file" ]; then
-              echo "📊 $file:"
-              python3 -c "
-              import json, os
-              try:
-                  with open('$file', 'r') as f:
-                      data = json.load(f)
-                  if 'vulnerabilities' in data:
-                      print(f'  Snyk vulnerabilities: {len(data[\"vulnerabilities\"])}')
-                  elif 'Results' in data:
-                      total_vulns = sum(len(r.get('Vulnerabilities', [])) for r in data['Results'])
-                      print(f'  Trivy vulnerabilities: {total_vulns}')
-                  else:
-                      print('  No vulnerability data found')
-              except Exception as e:
-                  print(f'  Error: {e}')
-              "
-            else
-              echo "❌ $file: Not found"
-            fi
-          done
-
-      # ===============================
-      # CREATE EMPTY RESULTS FOR MISSING FILES
-      # ===============================
-      - name: 📝 Create Missing Result Files
+      - name: 📝 Create Empty Results for Skipped Scans
         run: |
           cd scan-results
           
+          # Create empty results for any missing scan files
           for file in trivy-filesystem.json trivy-secrets.json trivy-config.json snyk-dependencies.json; do
             if [ ! -f "$file" ]; then
               if [[ "$file" == snyk-* ]]; then
@@ -379,27 +425,33 @@ jobs:
             fi
           done
 
-      # ===============================
-      # PROCESS AND AGGREGATE RESULTS
-      # ===============================
       - name: 📊 Process and Aggregate Results
         id: process-results
         run: |
           echo "📊 Processing scan results..."
           cd scan-results
           
-          # Create Python script for parsing results
+          # Initialize counters
+          CRITICAL=0
+          HIGH=0
+          MEDIUM=0
+          LOW=0
+          TOTAL=0
+          
+          # Create Python script for parsing results with detailed vulnerabilities
           cat > parse_results.py << 'EOF'
           import json
-          import os
           import sys
+          import os
           
           def parse_trivy_results(filename, scan_type="filesystem"):
+              """Parse Trivy results and extract detailed vulnerability information"""
               counts = {'critical': 0, 'high': 0, 'medium': 0, 'low': 0}
               vulnerabilities = []
               
               try:
                   if not os.path.exists(filename) or os.path.getsize(filename) == 0:
+                      print(f"File {filename} is empty or does not exist")
                       return counts, vulnerabilities
                       
                   with open(filename, 'r') as f:
@@ -415,10 +467,11 @@ jobs:
                                   if severity in counts:
                                       counts[severity] += 1
                                       
+                                      # Extract detailed vulnerability info
                                       vulnerability_detail = {
                                           'id': vuln.get('VulnerabilityID', 'N/A'),
                                           'title': vuln.get('Title', 'No title'),
-                                          'description': vuln.get('Description', 'No description')[:200] + '...' if vuln.get('Description') and len(vuln.get('Description')) > 200 else vuln.get('Description', 'No description'),
+                                          'description': (vuln.get('Description', 'No description')[:200] + '...') if len(vuln.get('Description', '')) > 200 else vuln.get('Description', 'No description'),
                                           'severity': severity.upper(),
                                           'package': vuln.get('PkgName', 'Unknown'),
                                           'installed_version': vuln.get('InstalledVersion', 'Unknown'),
@@ -426,24 +479,26 @@ jobs:
                                           'target': target,
                                           'source': 'Trivy',
                                           'scan_type': scan_type,
-                                          'references': vuln.get('References', [])[:3]
+                                          'references': vuln.get('References', [])[:3]  # Limite à 3 références
                                       }
                                       
                                       vulnerabilities.append(vulnerability_detail)
                   
-                  print(f"✅ Parsed {filename}: {sum(counts.values())} vulnerabilities")
+                  print(f"Parsed {filename}: {counts} - {len(vulnerabilities)} detailed vulnerabilities")
                   
               except Exception as e:
-                  print(f"❌ Error parsing {filename}: {e}")
+                  print(f"Error parsing {filename}: {e}")
               
               return counts, vulnerabilities
           
           def parse_snyk_results(filename):
+              """Parse Snyk results and extract detailed vulnerability information"""
               counts = {'critical': 0, 'high': 0, 'medium': 0, 'low': 0}
               vulnerabilities = []
               
               try:
                   if not os.path.exists(filename) or os.path.getsize(filename) == 0:
+                      print(f"File {filename} is empty or does not exist")
                       return counts, vulnerabilities
                       
                   with open(filename, 'r') as f:
@@ -456,10 +511,11 @@ jobs:
                               if severity in counts:
                                   counts[severity] += 1
                                   
+                                  # Extract detailed vulnerability info
                                   vulnerability_detail = {
                                       'id': vuln.get('id', 'N/A'),
                                       'title': vuln.get('title', 'No title'),
-                                      'description': vuln.get('description', 'No description')[:200] + '...' if vuln.get('description') and len(vuln.get('description')) > 200 else vuln.get('description', 'No description'),
+                                      'description': (vuln.get('description', 'No description')[:200] + '...') if len(vuln.get('description', '')) > 200 else vuln.get('description', 'No description'),
                                       'severity': severity.upper(),
                                       'package': vuln.get('packageName', 'Unknown'),
                                       'installed_version': vuln.get('version', 'Unknown'),
@@ -471,14 +527,14 @@ jobs:
                                   }
                                   
                                   vulnerabilities.append(vulnerability_detail)
-                      
+                                  
                       elif 'error' in data:
-                          print(f"⚠️ Snyk error: {data['error']}")
+                          print(f"Snyk error: {data['error']}")
                   
-                  print(f"✅ Parsed {filename}: {sum(counts.values())} vulnerabilities")
+                  print(f"Parsed {filename}: {counts} - {len(vulnerabilities)} detailed vulnerabilities")
                   
               except Exception as e:
-                  print(f"❌ Error parsing {filename}: {e}")
+                  print(f"Error parsing {filename}: {e}")
               
               return counts, vulnerabilities
           
@@ -505,7 +561,7 @@ jobs:
               total_counts[severity] += snyk_counts[severity]
           all_vulnerabilities.extend(snyk_vulns)
           
-          # Sort vulnerabilities by severity
+          # Sort vulnerabilities by severity (critical first)
           severity_order = {'CRITICAL': 0, 'HIGH': 1, 'MEDIUM': 2, 'LOW': 3}
           all_vulnerabilities.sort(key=lambda x: severity_order.get(x['severity'], 4))
           
@@ -526,17 +582,17 @@ jobs:
               f.write(f"LOW_COUNT={total_counts['low']}\n")
               f.write(f"TOTAL_VULNERABILITIES={total}\n")
           
-          # Save detailed vulnerabilities
+          # Save detailed vulnerabilities to JSON file
           with open('detailed-vulnerabilities.json', 'w') as f:
               json.dump(all_vulnerabilities, f, indent=2)
           
-          print(f"💾 Saved {len(all_vulnerabilities)} detailed vulnerabilities")
+          print(f"💾 Saved {len(all_vulnerabilities)} detailed vulnerabilities to detailed-vulnerabilities.json")
           EOF
           
           # Run Python script
           python3 parse_results.py
           
-          # Get results from environment
+          # Get the results from environment variables
           CRITICAL=${CRITICAL_COUNT:-0}
           HIGH=${HIGH_COUNT:-0}
           MEDIUM=${MEDIUM_COUNT:-0}
@@ -550,16 +606,49 @@ jobs:
           echo "low=$LOW" >> $GITHUB_OUTPUT
           echo "total-vulnerabilities=$TOTAL" >> $GITHUB_OUTPUT
           
-          echo "📊 Final Results:"
+          # Create summary JSON
+          cat > scan-summary.json << EOF
+          {
+            "scan_id": "${{ env.SCAN_ID }}",
+            "repository": "${{ env.REPO_NAME }}",
+            "scan_timestamp": "${{ env.SCAN_TIMESTAMP }}",
+            "files_scanned": ${{ env.FILES_SCANNED }},
+            "vulnerabilities": {
+              "critical": $CRITICAL,
+              "high": $HIGH,
+              "medium": $MEDIUM,
+              "low": $LOW,
+              "total": $TOTAL
+            },
+            "scan_depth": "${{ env.SCAN_DEPTH }}",
+            "tools_used": ["trivy", "snyk"],
+            "cache_performance": {
+              "trivy_cache_hit": "${{ steps.cache-trivy.outputs.cache-hit }}",
+              "node_cache_hit": "${{ steps.cache-node-global.outputs.cache-hit }}",
+              "scan_duration_optimized": true
+            }
+          }
+          EOF
+          
+          echo "📊 Results Summary:"
           echo "  🔴 Critical: $CRITICAL"
           echo "  🟠 High: $HIGH"  
           echo "  🟡 Medium: $MEDIUM"
           echo "  🟢 Low: $LOW"
           echo "  📊 Total: $TOTAL vulnerabilities"
+          echo "  📁 Files scanned: ${{ env.FILES_SCANNED }}"
+          
+          # Show cache performance
+          echo "⚡ Cache Performance:"
+          echo "  🔧 Trivy cached: ${{ steps.cache-trivy.outputs.cache-hit }}"
+          echo "  🟢 Node.js cached: ${{ steps.cache-node-global.outputs.cache-hit }}"
+          
+          # Show count of detailed vulnerabilities found
+          if [ -f "detailed-vulnerabilities.json" ]; then
+            DETAILED_COUNT=$(python3 -c "import json; print(len(json.load(open('detailed-vulnerabilities.json'))))" 2>/dev/null || echo "0")
+            echo "  📋 Detailed vulnerabilities: $DETAILED_COUNT"
+          fi
 
-      # ===============================
-      # SEND RESULTS TO BACKEND
-      # ===============================
       - name: 📤 Send Results to Backend
         id: send-results
         if: always()
@@ -571,26 +660,29 @@ jobs:
           DURATION=$((SCAN_END_TIME - SCAN_START_TIME))
            
           # Determine final status
-          if [ "${{ job.status }}" = "success" ]; then
-            FINAL_STATUS="completed"
-          else
+          FINAL_STATUS="completed"
+          if [ "${{ job.status }}" = "failure" ] || [ "${{ job.status }}" = "cancelled" ]; then
             FINAL_STATUS="failed"
           fi
               
-          # Get vulnerability counts
+          # Get vulnerability counts (with defaults)
           CRITICAL_COUNT=${CRITICAL_COUNT:-0}
           HIGH_COUNT=${HIGH_COUNT:-0}
           MEDIUM_COUNT=${MEDIUM_COUNT:-0}
           LOW_COUNT=${LOW_COUNT:-0}
           TOTAL_VULNERABILITIES=${TOTAL_VULNERABILITIES:-0}
              
-          # Read detailed vulnerabilities
+          # Read detailed vulnerabilities if file exists
           DETAILED_VULNS="[]"
           if [ -f "scan-results/detailed-vulnerabilities.json" ]; then
             DETAILED_VULNS=$(cat scan-results/detailed-vulnerabilities.json | jq -c '.')
+            echo "📋 Found $(echo "$DETAILED_VULNS" | jq length) detailed vulnerabilities"
+          elif [ -f "detailed-vulnerabilities.json" ]; then
+            DETAILED_VULNS=$(cat detailed-vulnerabilities.json | jq -c '.')
+            echo "📋 Found $(echo "$DETAILED_VULNS" | jq length) detailed vulnerabilities"
           fi
               
-          # Create callback payload
+          # Create callback payload with detailed vulnerabilities and cache info
           jq -n \
             --arg scan_id "${{ env.SCAN_ID }}" \
             --arg status "$FINAL_STATUS" \
@@ -605,8 +697,11 @@ jobs:
             --argjson medium "$MEDIUM_COUNT" \
             --argjson low "$LOW_COUNT" \
             --argjson total "$TOTAL_VULNERABILITIES" \
+            --arg scan_timestamp "${{ env.SCAN_TIMESTAMP }}" \
             --arg scan_depth "${{ env.SCAN_DEPTH }}" \
             --argjson detailed_vulnerabilities "$DETAILED_VULNS" \
+            --arg trivy_cached "${{ steps.cache-trivy.outputs.cache-hit }}" \
+            --arg node_cached "${{ steps.cache-node-global.outputs.cache-hit }}" \
             '{
               scan_id: $scan_id,
               status: $status,
@@ -622,15 +717,34 @@ jobs:
                 medium: $medium,
                 low: $low,
                 total: $total,
+                scan_timestamp: $scan_timestamp,
                 scan_depth: $scan_depth,
-                detailed_vulnerabilities: $detailed_vulnerabilities
+                tools_used: ["trivy", "snyk"],
+                detailed_vulnerabilities: $detailed_vulnerabilities,
+                cache_performance: {
+                  trivy_cache_hit: ($trivy_cached == "true"),
+                  node_cache_hit: ($node_cached == "true"),
+                  performance_optimized: true
+                }
               }
             }' > callback-payload.json
               
+          echo "📋 Callback payload created with $(echo "$DETAILED_VULNS" | jq -r 'length') detailed vulnerabilities"
+          echo "⚡ Cache hits - Trivy: ${{ steps.cache-trivy.outputs.cache-hit }}, Node: ${{ steps.cache-node-global.outputs.cache-hit }}"
+              
+          # Show summary of payload (without showing full detailed vulnerabilities to avoid log spam)
           echo "📋 Payload summary:"
           cat callback-payload.json | jq 'del(.results.detailed_vulnerabilities) + {detailed_vulnerabilities_count: (.results.detailed_vulnerabilities | length)}'
               
+          # Validate JSON before sending
+          if ! jq empty callback-payload.json 2>/dev/null; then
+            echo "❌ Generated JSON is invalid!"
+            cat callback-payload.json | head -20
+            exit 1
+          fi
+              
           # Send to callback URL with retries
+          CALLBACK_SUCCESS=false
           for attempt in 1 2 3; do
             echo "📞 Attempt $attempt: Sending to ${{ env.CALLBACK_URL }}"
             
@@ -638,28 +752,54 @@ jobs:
               -X POST \
               -H "Content-Type: application/json" \
               -H "User-Agent: GitHub-Actions-Security-Scanner/1.0" \
-              --max-time 30 \
+              -H "Accept: application/json" \
+              --max-time 60 \
+              --retry 0 \
               -d @callback-payload.json \
               "${{ env.CALLBACK_URL }}")
             
+            echo "Response status: $HTTP_STATUS"
+            
             if [ "$HTTP_STATUS" = "200" ] || [ "$HTTP_STATUS" = "201" ] || [ "$HTTP_STATUS" = "202" ]; then
               echo "✅ Callback successful!"
+              CALLBACK_SUCCESS=true
+              if [ -f callback-response.json ]; then
+                echo "Response body:"
+                cat callback-response.json
+              fi
               break
             else
               echo "⚠️ Callback failed with status $HTTP_STATUS"
+              if [ -f callback-response.json ]; then
+                echo "Response body:"
+                cat callback-response.json
+              fi
+              
               if [ $attempt -lt 3 ]; then
-                echo "Retrying in 5 seconds..."
-                sleep 5
+                echo "Retrying in 10 seconds..."
+                sleep 10
               fi
             fi
           done
-
+              
+          if [ "$CALLBACK_SUCCESS" = "false" ]; then
+            echo "❌ All callback attempts failed"
+            echo "callback-status=failed" >> $GITHUB_OUTPUT
+          else
+            echo "callback-status=success" >> $GITHUB_OUTPUT
+          fi
+              
+          # Set outputs
+          echo "duration=$DURATION" >> $GITHUB_OUTPUT
+          echo "final-status=$FINAL_STATUS" >> $GITHUB_OUTPUT
+      
+          
       - name: 📋 Final Status
         id: final-status
         if: always()
         run: |
-          echo "status=completed" >> $GITHUB_OUTPUT
-          echo "✅ Security scan finished"
+          echo "✅ Scan completed"
+          echo "status=success" >> $GITHUB_OUTPUT
 
       - name: 📁 Upload Scan Results
         if: always()
@@ -669,819 +809,6 @@ jobs:
           path: |
             scan-results/
             callback-payload.json
-          retention-days: 7
-
-# 🛡️ DevSecOps Security Scanning Pipeline - Cached Version
-
-# name: 🔒 Security Scanner
-
-# on:
-#   workflow_dispatch:
-#     inputs:
-#       target_repo:
-#         description: 'Repository URL to scan'
-#         required: true
-#         type: string
-#       scan_id:
-#         description: 'Unique scan identifier'
-#         required: true
-#         type: string
-#       callback_url:
-#         description: 'Callback URL for results'
-#         required: true
-#         type: string
-#       timestamp:
-#         description: 'Horodatage du déclenchement'
-#         required: false
-#       scan_depth:
-#         description: 'Niveau de scan (quick, standard, deep)'
-#         required: false
-#         default: 'standard'
-#         type: choice
-#         options:
-#           - standard
-#           - comprehensive
-#           - quick
-
-# env:
-#   SCAN_ID: ${{ github.event.inputs.scan_id }}
-#   CALLBACK_URL: ${{ github.event.inputs.callback_url }}
-#   TARGET_REPO: ${{ github.event.inputs.target_repo }}
-#   SCAN_DEPTH: ${{ github.event.inputs.scan_depth }}
-#   SCAN_TIMESTAMP: ${{ github.event.inputs.timestamp }}
-#   # Tool versions
-#   TRIVY_VERSION: "0.48.3"
-#   NODE_VERSION: "18"
-#   PYTHON_VERSION: "3.11"
-
-# jobs:
-#   security-scan:
-#     name: 🔍 Security Analysis
-#     runs-on: ubuntu-latest
-#     timeout-minutes: 30
-    
-#     outputs:
-#       scan-status: ${{ steps.final-status.outputs.status }}
-#       vulnerabilities-found: ${{ steps.process-results.outputs.total-vulnerabilities }}
-#       critical-count: ${{ steps.process-results.outputs.critical }}
-#       high-count: ${{ steps.process-results.outputs.high }}
-#       medium-count: ${{ steps.process-results.outputs.medium }}
-#       low-count: ${{ steps.process-results.outputs.low }}
-      
-#     steps:
-#       - name: 📋 Job Information
-#         run: |
-#           echo "🚀 Starting Security Scan"
-#           echo "📦 Repository: ${{ env.TARGET_REPO }}"
-#           echo "🆔 Scan ID: ${{ env.SCAN_ID }}"
-#           echo "📞 Callback: ${{ env.CALLBACK_URL }}"
-#           echo "🔍 Depth: ${{ env.SCAN_DEPTH }}"
-#           echo "⏰ Started: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-
-#       - name: ⚡ Setup Environment
-#         run: |
-#           echo "SCAN_START_TIME=$(date +%s)" >> $GITHUB_ENV
-#           echo "SCAN_TIMESTAMP=$(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_ENV
-          
-#           # Create results directory
-#           mkdir -p scan-results
-          
-#           # Initialize counters
-#           echo "FILES_SCANNED=0" >> $GITHUB_ENV
-#           echo "TOTAL_VULNERABILITIES=0" >> $GITHUB_ENV
-#           echo "CRITICAL_COUNT=0" >> $GITHUB_ENV
-#           echo "HIGH_COUNT=0" >> $GITHUB_ENV
-#           echo "MEDIUM_COUNT=0" >> $GITHUB_ENV
-#           echo "LOW_COUNT=0" >> $GITHUB_ENV
-
-#       # ===============================
-#       # BASIC SETUP
-#       # ===============================
-#       - name: 🐍 Setup Python
-#         uses: actions/setup-python@v4
-#         with:
-#           python-version: ${{ env.PYTHON_VERSION }}
-
-#       - name: 🟢 Setup Node.js
-#         uses: actions/setup-node@v4
-#         with:
-#           node-version: ${{ env.NODE_VERSION }}
-
-#       # ===============================
-#       # ROBUST TOOL INSTALLATION WITH FALLBACK
-#       # ===============================
-#       - name: 📅 Get Date for Cache Key
-#         id: get-date
-#         run: echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
-
-#       - name: 📦 Cache Security Tools
-#         id: cache-tools
-#         uses: actions/cache@v3
-#         with:
-#           path: |
-#             ~/.local/bin/trivy
-#             ~/.local/bin/snyk
-#             ~/.cache/trivy
-#             ~/.local/lib/node_modules/snyk
-#           key: security-tools-v2-${{ env.TRIVY_VERSION }}-node${{ env.NODE_VERSION }}-${{ steps.get-date.outputs.date }}
-#           restore-keys: |
-#             security-tools-v2-${{ env.TRIVY_VERSION }}-node${{ env.NODE_VERSION }}-
-#             security-tools-v2-${{ env.TRIVY_VERSION }}-
-
-#       - name: 🔧 Install/Verify Security Tools
-#         id: install-tools
-#         run: |
-#           echo "🔧 Installing/Verifying security tools..."
-          
-#           # Create local bin directory
-#           mkdir -p ~/.local/bin
-#           echo "$HOME/.local/bin" >> $GITHUB_PATH
-          
-#           # Initialize flags
-#           TRIVY_OK=false
-#           SNYK_OK=false
-          
-#           # Check/Install Trivy
-#           echo "📋 Checking Trivy..."
-#           if [ -f ~/.local/bin/trivy ] && ~/.local/bin/trivy --version >/dev/null 2>&1; then
-#             echo "✅ Trivy found in cache"
-#             TRIVY_OK=true
-#           else
-#             echo "📦 Installing Trivy v${{ env.TRIVY_VERSION }}..."
-#             wget -qO- "https://github.com/aquasecurity/trivy/releases/download/v${{ env.TRIVY_VERSION }}/trivy_${{ env.TRIVY_VERSION }}_Linux-64bit.tar.gz" | tar -xzf - -C ~/.local/bin
-#             chmod +x ~/.local/bin/trivy
-#             if ~/.local/bin/trivy --version >/dev/null 2>&1; then
-#               TRIVY_OK=true
-#               echo "✅ Trivy installed successfully"
-#             else
-#               echo "❌ Trivy installation failed"
-#             fi
-#           fi
-          
-#           # Check/Install Snyk
-#           echo "📋 Checking Snyk..."
-#           if [ -f ~/.local/bin/snyk ] && ~/.local/bin/snyk --version >/dev/null 2>&1; then
-#             echo "✅ Snyk found in cache"
-#             SNYK_OK=true
-#           else
-#             echo "📦 Installing Snyk..."
-            
-#             # Method 1: Try to restore from node_modules cache
-#             if [ -f ~/.local/lib/node_modules/snyk/bin/snyk ]; then
-#               echo "🔗 Creating symlink from cached node_modules..."
-#               ln -sf ~/.local/lib/node_modules/snyk/bin/snyk ~/.local/bin/snyk
-#               chmod +x ~/.local/bin/snyk
-#             fi
-            
-#             # Test if it works
-#             if [ -f ~/.local/bin/snyk ] && ~/.local/bin/snyk --version >/dev/null 2>&1; then
-#               SNYK_OK=true
-#               echo "✅ Snyk restored from cache"
-#             else
-#               # Method 2: Fresh installation
-#               echo "📦 Installing Snyk fresh..."
-#               mkdir -p ~/.local/lib/node_modules
-#               npm install --prefix ~/.local snyk@latest >/dev/null 2>&1
-              
-#               # Create direct symlink
-#               if [ -f ~/.local/lib/node_modules/snyk/bin/snyk ]; then
-#                 ln -sf ~/.local/lib/node_modules/snyk/bin/snyk ~/.local/bin/snyk
-#                 chmod +x ~/.local/bin/snyk
-#               fi
-              
-#               # Test again
-#               if [ -f ~/.local/bin/snyk ] && ~/.local/bin/snyk --version >/dev/null 2>&1; then
-#                 SNYK_OK=true
-#                 echo "✅ Snyk installed fresh"
-#               else
-#                 # Method 3: Global fallback
-#                 echo "📦 Trying global Snyk installation..."
-#                 npm install -g snyk@latest >/dev/null 2>&1
-                
-#                 # Create symlink to global installation
-#                 if which snyk >/dev/null 2>&1; then
-#                   ln -sf $(which snyk) ~/.local/bin/snyk
-#                   SNYK_OK=true
-#                   echo "✅ Snyk installed globally and linked"
-#                 else
-#                   echo "⚠️ Snyk installation failed, will continue without Snyk"
-#                 fi
-#               fi
-#             fi
-#           fi
-          
-#           # Update Trivy database
-#           if [ "$TRIVY_OK" = true ]; then
-#             echo "🔄 Updating Trivy vulnerability database..."
-#             ~/.local/bin/trivy image --download-db-only >/dev/null 2>&1 || echo "⚠️ Trivy DB update failed, will use cached DB"
-#           fi
-          
-#           # Set outputs
-#           echo "trivy-ok=$TRIVY_OK" >> $GITHUB_OUTPUT
-#           echo "snyk-ok=$SNYK_OK" >> $GITHUB_OUTPUT
-#           echo "cache-hit=${{ steps.cache-tools.outputs.cache-hit }}" >> $GITHUB_OUTPUT
-          
-#           echo "📊 Tool Status:"
-#           echo "  Trivy: $TRIVY_OK"
-#           echo "  Snyk: $SNYK_OK"
-#           echo "  Cache Hit: ${{ steps.cache-tools.outputs.cache-hit }}"
-
-#       # ===============================
-#       # VERIFY TOOLS
-#       # ===============================
-#       - name: ✅ Verify Tool Installations
-#         run: |
-#           echo "🔍 Final tool verification..."
-#           echo "⚡ Cache Performance:"
-#           echo "  🔧 Tools cache hit: ${{ steps.install-tools.outputs.cache-hit }}"
-#           echo "  🔧 Trivy OK: ${{ steps.install-tools.outputs.trivy-ok }}"
-#           echo "  🔧 Snyk OK: ${{ steps.install-tools.outputs.snyk-ok }}"
-          
-#           echo ""
-#           echo "📋 Tool Versions:"
-          
-#           # Verify Trivy
-#           if [ "${{ steps.install-tools.outputs.trivy-ok }}" = "true" ]; then
-#             echo "Trivy: $(~/.local/bin/trivy --version | head -1)"
-#           else
-#             echo "❌ Trivy not available - filesystem/config/secret scans will be skipped"
-#           fi
-          
-#           # Verify Snyk
-#           if [ "${{ steps.install-tools.outputs.snyk-ok }}" = "true" ]; then
-#             echo "Snyk: $(~/.local/bin/snyk --version)"
-#           else
-#             echo "⚠️ Snyk not available - dependency scans will be skipped"
-#           fi
-          
-#           echo "Node.js: $(node --version)"
-#           echo "Python: $(python3 --version)"
-          
-#           # Check if at least one security tool is available
-#           if [ "${{ steps.install-tools.outputs.trivy-ok }}" = "false" ]; then
-#             echo "❌ No security scanning tools available!"
-#             exit 1
-#           fi
-          
-#           echo "✅ Tool verification completed"
-
-#       # ===============================
-#       # REPOSITORY CLONING
-#       # ===============================
-#       - name: 📂 Clone Target Repository
-#         id: clone-repo
-#         run: |
-#           echo "🔄 Cloning repository..."
-          
-#           # Extract repo info from URL
-#           REPO_URL="${{ env.TARGET_REPO }}"
-#           REPO_NAME=$(echo $REPO_URL | sed 's/.*github\.com\///g' | sed 's/\.git$//g')
-#           REPO_DIR=$(echo $REPO_NAME | sed 's/.*\///g')
-          
-#           echo "REPO_NAME=$REPO_NAME" >> $GITHUB_ENV
-#           echo "REPO_DIR=$REPO_DIR" >> $GITHUB_ENV
-          
-#           # Clone with depth based on scan level
-#           CLONE_DEPTH=1
-#           if [ "${{ env.SCAN_DEPTH }}" = "comprehensive" ]; then
-#             CLONE_DEPTH=50
-#           elif [ "${{ env.SCAN_DEPTH }}" = "standard" ]; then
-#             CLONE_DEPTH=10
-#           fi
-          
-#           echo "📥 Cloning with depth: $CLONE_DEPTH"
-#           git clone --depth=$CLONE_DEPTH "$REPO_URL" "$REPO_DIR"
-          
-#           if [ ! -d "$REPO_DIR" ]; then
-#             echo "❌ Failed to clone repository"
-#             exit 1
-#           fi
-          
-#           cd "$REPO_DIR"
-          
-#           # Count files (excluding .git directory)
-#           FILE_COUNT=$(find . -type f -not -path './.git/*' | wc -l)
-#           echo "FILES_SCANNED=$FILE_COUNT" >> $GITHUB_ENV
-          
-#           echo "✅ Repository cloned: $FILE_COUNT files"
-#           echo "repository=$REPO_NAME" >> $GITHUB_OUTPUT
-#           echo "directory=$REPO_DIR" >> $GITHUB_OUTPUT
-#           echo "files-count=$FILE_COUNT" >> $GITHUB_OUTPUT
-
-#       # ===============================
-#       # SNYK CONFIGURATION
-#       # ===============================
-#       - name: 🔐 Configure Snyk Authentication
-#         if: steps.install-tools.outputs.snyk-ok == 'true' && (env.SCAN_DEPTH == 'comprehensive' || env.SCAN_DEPTH == 'standard')
-#         env:
-#           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-#         run: |
-#           if [ -n "$SNYK_TOKEN" ]; then
-#             ~/.local/bin/snyk auth "$SNYK_TOKEN"
-#             echo "✅ Snyk authenticated"
-#           else
-#             echo "⚠️ SNYK_TOKEN not provided - some scans will be limited"
-#           fi
-
-#       # ===============================
-#       # SECURITY SCANS (with conditional execution)
-#       # ===============================
-#       - name: 🔍 Filesystem Security Scan
-#         id: trivy-fs
-#         if: steps.install-tools.outputs.trivy-ok == 'true'
-#         continue-on-error: true
-#         run: |
-#           echo "🔍 Running Trivy filesystem scan..."
-#           cd "${{ env.REPO_DIR }}"
-          
-#           # Ensure output directory exists
-#           mkdir -p ../scan-results
-          
-#           # Trivy filesystem scan with JSON output
-#           ~/.local/bin/trivy fs . \
-#             --format json \
-#             --output ../scan-results/trivy-filesystem.json \
-#             --severity CRITICAL,HIGH,MEDIUM,LOW \
-#             --timeout 10m \
-#             --quiet \
-#             --exit-code 0 || {
-#               echo "⚠️ Trivy filesystem scan had issues, but continuing..."
-#               echo '{"Results": []}' > ../scan-results/trivy-filesystem.json
-#             }
-          
-#           echo "✅ Filesystem scan completed"
-
-#       - name: 🔐 Secret Detection
-#         id: trivy-secrets
-#         if: steps.install-tools.outputs.trivy-ok == 'true'
-#         continue-on-error: true
-#         run: |
-#           echo "🔐 Scanning for secrets..."
-#           cd "${{ env.REPO_DIR }}"
-          
-#           ~/.local/bin/trivy fs . \
-#             --scanners secret \
-#             --format json \
-#             --output ../scan-results/trivy-secrets.json \
-#             --timeout 5m \
-#             --quiet \
-#             --exit-code 0 || {
-#               echo "⚠️ Secret scan had issues, but continuing..."
-#               echo '{"Results": []}' > ../scan-results/trivy-secrets.json
-#             }
-          
-#           echo "✅ Secret detection completed"
-
-#       - name: ⚙️ Configuration Security Scan
-#         id: trivy-config
-#         if: steps.install-tools.outputs.trivy-ok == 'true'
-#         continue-on-error: true
-#         run: |
-#           echo "⚙️ Scanning configuration files..."
-#           cd "${{ env.REPO_DIR }}"
-          
-#           ~/.local/bin/trivy fs . \
-#             --scanners config \
-#             --format json \
-#             --output ../scan-results/trivy-config.json \
-#             --timeout 5m \
-#             --quiet \
-#             --exit-code 0 || {
-#               echo "⚠️ Config scan had issues, but continuing..."
-#               echo '{"Results": []}' > ../scan-results/trivy-config.json
-#             }
-          
-#           echo "✅ Configuration scan completed"
-
-#       - name: 📦 Dependency Security Scan
-#         id: snyk-dependencies
-#         if: steps.install-tools.outputs.snyk-ok == 'true' && env.SKIP_SNYK != 'true'
-#         continue-on-error: true
-#         run: |
-#           echo "📦 Scanning dependencies with Snyk..."
-#           cd "${{ env.REPO_DIR }}"
-          
-#           # Create empty results file in case Snyk fails
-#           echo '{"vulnerabilities": []}' > ../scan-results/snyk-dependencies.json
-          
-#           # Snyk test with JSON output
-#           ~/.local/bin/snyk test \
-#             --json \
-#             --all-projects \
-#             --detection-depth=3 \
-#             --severity-threshold=low > ../scan-results/snyk-dependencies.json 2>/dev/null || {
-#               echo "⚠️ Snyk scan completed with findings or errors"
-#               # If Snyk fails, ensure we have a valid JSON structure
-#               if [ ! -s ../scan-results/snyk-dependencies.json ]; then
-#                 echo '{"vulnerabilities": []}' > ../scan-results/snyk-dependencies.json
-#               fi
-#             }
-          
-#           echo "✅ Dependency scan completed"
-
-#       # ===============================
-#       # CREATE EMPTY RESULTS FOR SKIPPED SCANS
-#       # ===============================
-#       - name: 📝 Create Empty Results for Skipped Scans
-#         run: |
-#           cd scan-results
-          
-#           # Create empty results for any missing scan files
-#           for file in trivy-filesystem.json trivy-secrets.json trivy-config.json snyk-dependencies.json; do
-#             if [ ! -f "$file" ]; then
-#               if [[ "$file" == snyk-* ]]; then
-#                 echo '{"vulnerabilities": []}' > "$file"
-#               else
-#                 echo '{"Results": []}' > "$file"
-#               fi
-#               echo "📝 Created empty result file: $file"
-#             fi
-#           done
-
-#       - name: 📊 Process and Aggregate Results
-#         id: process-results
-#         run: |
-#           echo "📊 Processing scan results..."
-#           cd scan-results
-          
-#           # Initialize counters
-#           CRITICAL=0
-#           HIGH=0
-#           MEDIUM=0
-#           LOW=0
-#           TOTAL=0
-          
-#           # Create Python script for parsing results with detailed vulnerabilities
-#           cat > parse_results.py << 'EOF'
-#           import json
-#           import sys
-#           import os
-          
-#           def parse_trivy_results(filename, scan_type="filesystem"):
-#               """Parse Trivy results and extract detailed vulnerability information"""
-#               counts = {'critical': 0, 'high': 0, 'medium': 0, 'low': 0}
-#               vulnerabilities = []
-              
-#               try:
-#                   if not os.path.exists(filename) or os.path.getsize(filename) == 0:
-#                       print(f"File {filename} is empty or does not exist")
-#                       return counts, vulnerabilities
-                      
-#                   with open(filename, 'r') as f:
-#                       data = json.load(f)
-                  
-#                   if isinstance(data, dict) and 'Results' in data:
-#                       for result in data['Results']:
-#                           target = result.get('Target', 'Unknown')
-                          
-#                           if 'Vulnerabilities' in result and result['Vulnerabilities']:
-#                               for vuln in result['Vulnerabilities']:
-#                                   severity = vuln.get('Severity', '').lower()
-#                                   if severity in counts:
-#                                       counts[severity] += 1
-                                      
-#                                       # Extract detailed vulnerability info
-#                                       vulnerability_detail = {
-#                                           'id': vuln.get('VulnerabilityID', 'N/A'),
-#                                           'title': vuln.get('Title', 'No title'),
-#                                           'description': (vuln.get('Description', 'No description')[:200] + '...') if len(vuln.get('Description', '')) > 200 else vuln.get('Description', 'No description'),
-#                                           'severity': severity.upper(),
-#                                           'package': vuln.get('PkgName', 'Unknown'),
-#                                           'installed_version': vuln.get('InstalledVersion', 'Unknown'),
-#                                           'fixed_version': vuln.get('FixedVersion', 'Not available'),
-#                                           'target': target,
-#                                           'source': 'Trivy',
-#                                           'scan_type': scan_type,
-#                                           'references': vuln.get('References', [])[:3]  # Limite à 3 références
-#                                       }
-                                      
-#                                       vulnerabilities.append(vulnerability_detail)
-                  
-#                   print(f"Parsed {filename}: {counts} - {len(vulnerabilities)} detailed vulnerabilities")
-                  
-#               except Exception as e:
-#                   print(f"Error parsing {filename}: {e}")
-              
-#               return counts, vulnerabilities
-          
-#           def parse_snyk_results(filename):
-#               """Parse Snyk results and extract detailed vulnerability information"""
-#               counts = {'critical': 0, 'high': 0, 'medium': 0, 'low': 0}
-#               vulnerabilities = []
-              
-#               try:
-#                   if not os.path.exists(filename) or os.path.getsize(filename) == 0:
-#                       print(f"File {filename} is empty or does not exist")
-#                       return counts, vulnerabilities
-                      
-#                   with open(filename, 'r') as f:
-#                       data = json.load(f)
-                  
-#                   if isinstance(data, dict):
-#                       if 'vulnerabilities' in data:
-#                           for vuln in data['vulnerabilities']:
-#                               severity = vuln.get('severity', '').lower()
-#                               if severity in counts:
-#                                   counts[severity] += 1
-                                  
-#                                   # Extract detailed vulnerability info
-#                                   vulnerability_detail = {
-#                                       'id': vuln.get('id', 'N/A'),
-#                                       'title': vuln.get('title', 'No title'),
-#                                       'description': (vuln.get('description', 'No description')[:200] + '...') if len(vuln.get('description', '')) > 200 else vuln.get('description', 'No description'),
-#                                       'severity': severity.upper(),
-#                                       'package': vuln.get('packageName', 'Unknown'),
-#                                       'installed_version': vuln.get('version', 'Unknown'),
-#                                       'fixed_version': ', '.join(vuln.get('fixedIn', [])) if vuln.get('fixedIn') else 'Not available',
-#                                       'target': vuln.get('from', ['Unknown'])[0] if vuln.get('from') else 'Unknown',
-#                                       'source': 'Snyk',
-#                                       'scan_type': 'dependency',
-#                                       'references': [vuln.get('url')] if vuln.get('url') else []
-#                                   }
-                                  
-#                                   vulnerabilities.append(vulnerability_detail)
-                                  
-#                       elif 'error' in data:
-#                           print(f"Snyk error: {data['error']}")
-                  
-#                   print(f"Parsed {filename}: {counts} - {len(vulnerabilities)} detailed vulnerabilities")
-                  
-#               except Exception as e:
-#                   print(f"Error parsing {filename}: {e}")
-              
-#               return counts, vulnerabilities
-          
-#           # Parse all result files
-#           total_counts = {'critical': 0, 'high': 0, 'medium': 0, 'low': 0}
-#           all_vulnerabilities = []
-          
-#           # Parse Trivy results
-#           trivy_files = [
-#               ('trivy-filesystem.json', 'filesystem'),
-#               ('trivy-secrets.json', 'secrets'), 
-#               ('trivy-config.json', 'configuration')
-#           ]
-          
-#           for filename, scan_type in trivy_files:
-#               counts, vulns = parse_trivy_results(filename, scan_type)
-#               for severity in total_counts:
-#                   total_counts[severity] += counts[severity]
-#               all_vulnerabilities.extend(vulns)
-          
-#           # Parse Snyk results
-#           snyk_counts, snyk_vulns = parse_snyk_results('snyk-dependencies.json')
-#           for severity in total_counts:
-#               total_counts[severity] += snyk_counts[severity]
-#           all_vulnerabilities.extend(snyk_vulns)
-          
-#           # Sort vulnerabilities by severity (critical first)
-#           severity_order = {'CRITICAL': 0, 'HIGH': 1, 'MEDIUM': 2, 'LOW': 3}
-#           all_vulnerabilities.sort(key=lambda x: severity_order.get(x['severity'], 4))
-          
-#           # Output results
-#           total = sum(total_counts.values())
-#           print(f"CRITICAL={total_counts['critical']}")
-#           print(f"HIGH={total_counts['high']}")
-#           print(f"MEDIUM={total_counts['medium']}")
-#           print(f"LOW={total_counts['low']}")
-#           print(f"TOTAL={total}")
-#           print(f"DETAILED_VULNERABILITIES={len(all_vulnerabilities)}")
-          
-#           # Save to environment file
-#           with open(os.environ.get('GITHUB_ENV', '/dev/null'), 'a') as f:
-#               f.write(f"CRITICAL_COUNT={total_counts['critical']}\n")
-#               f.write(f"HIGH_COUNT={total_counts['high']}\n")
-#               f.write(f"MEDIUM_COUNT={total_counts['medium']}\n")
-#               f.write(f"LOW_COUNT={total_counts['low']}\n")
-#               f.write(f"TOTAL_VULNERABILITIES={total}\n")
-          
-#           # Save detailed vulnerabilities to JSON file
-#           with open('detailed-vulnerabilities.json', 'w') as f:
-#               json.dump(all_vulnerabilities, f, indent=2)
-          
-#           print(f"💾 Saved {len(all_vulnerabilities)} detailed vulnerabilities to detailed-vulnerabilities.json")
-#           EOF
-          
-#           # Run Python script
-#           python3 parse_results.py
-          
-#           # Get the results from environment variables
-#           CRITICAL=${CRITICAL_COUNT:-0}
-#           HIGH=${HIGH_COUNT:-0}
-#           MEDIUM=${MEDIUM_COUNT:-0}
-#           LOW=${LOW_COUNT:-0}
-#           TOTAL=${TOTAL_VULNERABILITIES:-0}
-          
-#           # Set outputs
-#           echo "critical=$CRITICAL" >> $GITHUB_OUTPUT
-#           echo "high=$HIGH" >> $GITHUB_OUTPUT
-#           echo "medium=$MEDIUM" >> $GITHUB_OUTPUT
-#           echo "low=$LOW" >> $GITHUB_OUTPUT
-#           echo "total-vulnerabilities=$TOTAL" >> $GITHUB_OUTPUT
-          
-#           # Create summary JSON
-#           cat > scan-summary.json << EOF
-#           {
-#             "scan_id": "${{ env.SCAN_ID }}",
-#             "repository": "${{ env.REPO_NAME }}",
-#             "scan_timestamp": "${{ env.SCAN_TIMESTAMP }}",
-#             "files_scanned": ${{ env.FILES_SCANNED }},
-#             "vulnerabilities": {
-#               "critical": $CRITICAL,
-#               "high": $HIGH,
-#               "medium": $MEDIUM,
-#               "low": $LOW,
-#               "total": $TOTAL
-#             },
-#             "scan_depth": "${{ env.SCAN_DEPTH }}",
-#             "tools_used": ["trivy", "snyk"],
-#             "cache_performance": {
-#               "trivy_cache_hit": "${{ steps.cache-trivy.outputs.cache-hit }}",
-#               "node_cache_hit": "${{ steps.cache-node-global.outputs.cache-hit }}",
-#               "scan_duration_optimized": true
-#             }
-#           }
-#           EOF
-          
-#           echo "📊 Results Summary:"
-#           echo "  🔴 Critical: $CRITICAL"
-#           echo "  🟠 High: $HIGH"  
-#           echo "  🟡 Medium: $MEDIUM"
-#           echo "  🟢 Low: $LOW"
-#           echo "  📊 Total: $TOTAL vulnerabilities"
-#           echo "  📁 Files scanned: ${{ env.FILES_SCANNED }}"
-          
-#           # Show cache performance
-#           echo "⚡ Cache Performance:"
-#           echo "  🔧 Trivy cached: ${{ steps.cache-trivy.outputs.cache-hit }}"
-#           echo "  🟢 Node.js cached: ${{ steps.cache-node-global.outputs.cache-hit }}"
-          
-#           # Show count of detailed vulnerabilities found
-#           if [ -f "detailed-vulnerabilities.json" ]; then
-#             DETAILED_COUNT=$(python3 -c "import json; print(len(json.load(open('detailed-vulnerabilities.json'))))" 2>/dev/null || echo "0")
-#             echo "  📋 Detailed vulnerabilities: $DETAILED_COUNT"
-#           fi
-
-#       - name: 📤 Send Results to Backend
-#         id: send-results
-#         if: always()
-#         run: |
-#           echo "📤 Sending results to callback URL..."
-              
-#           # Calculate scan duration
-#           SCAN_END_TIME=$(date +%s)
-#           DURATION=$((SCAN_END_TIME - SCAN_START_TIME))
-           
-#           # Determine final status
-#           FINAL_STATUS="completed"
-#           if [ "${{ job.status }}" = "failure" ] || [ "${{ job.status }}" = "cancelled" ]; then
-#             FINAL_STATUS="failed"
-#           fi
-              
-#           # Get vulnerability counts (with defaults)
-#           CRITICAL_COUNT=${CRITICAL_COUNT:-0}
-#           HIGH_COUNT=${HIGH_COUNT:-0}
-#           MEDIUM_COUNT=${MEDIUM_COUNT:-0}
-#           LOW_COUNT=${LOW_COUNT:-0}
-#           TOTAL_VULNERABILITIES=${TOTAL_VULNERABILITIES:-0}
-             
-#           # Read detailed vulnerabilities if file exists
-#           DETAILED_VULNS="[]"
-#           if [ -f "scan-results/detailed-vulnerabilities.json" ]; then
-#             DETAILED_VULNS=$(cat scan-results/detailed-vulnerabilities.json | jq -c '.')
-#             echo "📋 Found $(echo "$DETAILED_VULNS" | jq length) detailed vulnerabilities"
-#           elif [ -f "detailed-vulnerabilities.json" ]; then
-#             DETAILED_VULNS=$(cat detailed-vulnerabilities.json | jq -c '.')
-#             echo "📋 Found $(echo "$DETAILED_VULNS" | jq length) detailed vulnerabilities"
-#           fi
-              
-#           # Create callback payload with detailed vulnerabilities and cache info
-#           jq -n \
-#             --arg scan_id "${{ env.SCAN_ID }}" \
-#             --arg status "$FINAL_STATUS" \
-#             --arg repository "${{ env.REPO_NAME }}" \
-#             --arg github_url "${{ env.TARGET_REPO }}" \
-#             --argjson duration "$DURATION" \
-#             --argjson files_scanned "${{ env.FILES_SCANNED }}" \
-#             --arg start_time "${{ env.SCAN_TIMESTAMP }}" \
-#             --arg completed_at "$(date -u '+%Y-%m-%d %H:%M:%S UTC')" \
-#             --argjson critical "$CRITICAL_COUNT" \
-#             --argjson high "$HIGH_COUNT" \
-#             --argjson medium "$MEDIUM_COUNT" \
-#             --argjson low "$LOW_COUNT" \
-#             --argjson total "$TOTAL_VULNERABILITIES" \
-#             --arg scan_timestamp "${{ env.SCAN_TIMESTAMP }}" \
-#             --arg scan_depth "${{ env.SCAN_DEPTH }}" \
-#             --argjson detailed_vulnerabilities "$DETAILED_VULNS" \
-#             --arg trivy_cached "${{ steps.cache-trivy.outputs.cache-hit }}" \
-#             --arg node_cached "${{ steps.cache-node-global.outputs.cache-hit }}" \
-#             '{
-#               scan_id: $scan_id,
-#               status: $status,
-#               repository: $repository,
-#               github_url: $github_url,
-#               duration: $duration,
-#               files_scanned: $files_scanned,
-#               start_time: $start_time,
-#               completed_at: $completed_at,
-#               results: {
-#                 critical: $critical,
-#                 high: $high,
-#                 medium: $medium,
-#                 low: $low,
-#                 total: $total,
-#                 scan_timestamp: $scan_timestamp,
-#                 scan_depth: $scan_depth,
-#                 tools_used: ["trivy", "snyk"],
-#                 detailed_vulnerabilities: $detailed_vulnerabilities,
-#                 cache_performance: {
-#                   trivy_cache_hit: ($trivy_cached == "true"),
-#                   node_cache_hit: ($node_cached == "true"),
-#                   performance_optimized: true
-#                 }
-#               }
-#             }' > callback-payload.json
-              
-#           echo "📋 Callback payload created with $(echo "$DETAILED_VULNS" | jq -r 'length') detailed vulnerabilities"
-#           echo "⚡ Cache hits - Trivy: ${{ steps.cache-trivy.outputs.cache-hit }}, Node: ${{ steps.cache-node-global.outputs.cache-hit }}"
-              
-#           # Show summary of payload (without showing full detailed vulnerabilities to avoid log spam)
-#           echo "📋 Payload summary:"
-#           cat callback-payload.json | jq 'del(.results.detailed_vulnerabilities) + {detailed_vulnerabilities_count: (.results.detailed_vulnerabilities | length)}'
-              
-#           # Validate JSON before sending
-#           if ! jq empty callback-payload.json 2>/dev/null; then
-#             echo "❌ Generated JSON is invalid!"
-#             cat callback-payload.json | head -20
-#             exit 1
-#           fi
-              
-#           # Send to callback URL with retries
-#           CALLBACK_SUCCESS=false
-#           for attempt in 1 2 3; do
-#             echo "📞 Attempt $attempt: Sending to ${{ env.CALLBACK_URL }}"
-            
-#             HTTP_STATUS=$(curl -s -o callback-response.json -w "%{http_code}" \
-#               -X POST \
-#               -H "Content-Type: application/json" \
-#               -H "User-Agent: GitHub-Actions-Security-Scanner/1.0" \
-#               -H "Accept: application/json" \
-#               --max-time 60 \
-#               --retry 0 \
-#               -d @callback-payload.json \
-#               "${{ env.CALLBACK_URL }}")
-            
-#             echo "Response status: $HTTP_STATUS"
-            
-#             if [ "$HTTP_STATUS" = "200" ] || [ "$HTTP_STATUS" = "201" ] || [ "$HTTP_STATUS" = "202" ]; then
-#               echo "✅ Callback successful!"
-#               CALLBACK_SUCCESS=true
-#               if [ -f callback-response.json ]; then
-#                 echo "Response body:"
-#                 cat callback-response.json
-#               fi
-#               break
-#             else
-#               echo "⚠️ Callback failed with status $HTTP_STATUS"
-#               if [ -f callback-response.json ]; then
-#                 echo "Response body:"
-#                 cat callback-response.json
-#               fi
-              
-#               if [ $attempt -lt 3 ]; then
-#                 echo "Retrying in 10 seconds..."
-#                 sleep 10
-#               fi
-#             fi
-#           done
-              
-#           if [ "$CALLBACK_SUCCESS" = "false" ]; then
-#             echo "❌ All callback attempts failed"
-#             echo "callback-status=failed" >> $GITHUB_OUTPUT
-#           else
-#             echo "callback-status=success" >> $GITHUB_OUTPUT
-#           fi
-              
-#           # Set outputs
-#           echo "duration=$DURATION" >> $GITHUB_OUTPUT
-#           echo "final-status=$FINAL_STATUS" >> $GITHUB_OUTPUT
-      
-          
-#       - name: 📋 Final Status
-#         id: final-status
-#         if: always()
-#         run: |
-#           echo "✅ Scan completed"
-#           echo "status=success" >> $GITHUB_OUTPUT
-
-#       - name: 📁 Upload Scan Results
-#         if: always()
-#         uses: actions/upload-artifact@v4
-#         with:
-#           name: security-scan-results-${{ env.SCAN_ID }}
-#           path: |
-#             scan-results/
-#             callback-payload.json
-#             callback-response.json
-#           retention-days: 30
-#           if-no-files-found: warn
+            callback-response.json
+          retention-days: 30
+          if-no-files-found: warn
