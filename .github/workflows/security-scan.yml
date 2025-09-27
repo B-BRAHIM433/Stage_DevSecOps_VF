@@ -128,19 +128,75 @@ jobs:
             return 1
           }
           
-          # Install Trivy
-          TRIVY_INSTALL="wget -qO- https://github.com/aquasecurity/trivy/releases/download/v${{ env.TRIVY_VERSION }}/trivy_${{ env.TRIVY_VERSION }}_Linux-64bit.tar.gz | tar -xzf - -C ~/.local/bin trivy && chmod +x ~/.local/bin/trivy"
-          TRIVY_VERIFY="~/.local/bin/trivy --version"
+          # Robust Semgrep installation with fallbacks
+          install_semgrep() {
+            echo "📦 Installing Semgrep..."
+            
+            # Method 1: Direct pip install
+            if pip3 install --user "semgrep==${{ env.SEMGREP_VERSION }}" >/dev/null 2>&1; then
+              if ~/.local/bin/semgrep --version >/dev/null 2>&1; then
+                echo "✅ Semgrep installed via pip --user"
+                return 0
+              fi
+            fi
+            
+            # Method 2: Try without version constraint
+            echo "🔄 Trying without version constraint..."
+            if pip3 install --user semgrep >/dev/null 2>&1; then
+              if ~/.local/bin/semgrep --version >/dev/null 2>&1; then
+                echo "✅ Semgrep installed (latest version)"
+                return 0
+              fi
+            fi
+            
+            # Method 3: Global installation fallback
+            echo "🔄 Trying global installation..."
+            if pip3 install "semgrep==${{ env.SEMGREP_VERSION }}" >/dev/null 2>&1; then
+              # Find semgrep and create symlink
+              SEMGREP_PATH=$(which semgrep 2>/dev/null || find /usr/local/bin /opt -name "semgrep" 2>/dev/null | head -1)
+              if [ -n "$SEMGREP_PATH" ] && [ -x "$SEMGREP_PATH" ]; then
+                ln -sf "$SEMGREP_PATH" ~/.local/bin/semgrep
+                if ~/.local/bin/semgrep --version >/dev/null 2>&1; then
+                  echo "✅ Semgrep installed globally and linked"
+                  return 0
+                fi
+              fi
+            fi
+            
+            echo "❌ All Semgrep installation methods failed"
+            return 1
+          }
           
-          # Install Semgrep (faster alternative to some Snyk functionality)
-          SEMGREP_INSTALL="pip3 install --user semgrep==${{ env.SEMGREP_VERSION }} && ln -sf ~/.local/bin/semgrep ~/.local/bin/semgrep"
-          SEMGREP_VERIFY="~/.local/bin/semgrep --version"
+          # Install tools with improved logic
+          install_tool() {
+            local tool=$1
+            local install_func=$2
+            local verify_cmd=$3
+            
+            echo "📦 Installing $tool..."
+            if eval "$verify_cmd" >/dev/null 2>&1; then
+              echo "✅ $tool already available"
+              return 0
+            fi
+            
+            if eval "$install_func"; then
+              return 0
+            fi
+            
+            echo "❌ $tool installation failed"
+            return 1
+          }
+          
+          # Install Trivy
+          install_trivy() {
+            wget -qO- "https://github.com/aquasecurity/trivy/releases/download/v${{ env.TRIVY_VERSION }}/trivy_${{ env.TRIVY_VERSION }}_Linux-64bit.tar.gz" | tar -xzf - -C ~/.local/bin trivy && chmod +x ~/.local/bin/trivy
+          }
           
           # Install in parallel (background processes)
-          install_tool "Trivy" "$TRIVY_INSTALL" "$TRIVY_VERIFY" &
+          install_tool "Trivy" "install_trivy" "~/.local/bin/trivy --version" &
           TRIVY_PID=$!
           
-          install_tool "Semgrep" "$SEMGREP_INSTALL" "$SEMGREP_VERIFY" &
+          install_tool "Semgrep" "install_semgrep" "~/.local/bin/semgrep --version" &
           SEMGREP_PID=$!
           
           # Wait for installations
