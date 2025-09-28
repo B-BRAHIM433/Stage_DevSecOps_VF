@@ -1,7 +1,7 @@
 # 🔐 Security Vulnerability Scanning System
 
 A complete **Vulns detection solution** for automated vulnerability scanning with a modern dashboard, backend API, and CI/CD integration.  
-The system scans GitHub repositories in real-time, aggregates vulnerabilities from multiple tools, and provides a rich web interface for managing and exporting results.
+The system scans GitHub repositories in real-time, aggregates vulnerabilities from **Trivy** and **Snyk**, and provides a web interface for managing and exporting results.
 
 ---
 
@@ -27,17 +27,14 @@ The system scans GitHub repositories in real-time, aggregates vulnerabilities fr
   - Vulnerabilities
   - Stats
   - CSV/JSON exports
-- Webhook callback system to receive GitHub Actions results
+- Webhook callback system to receive GitHub Actions results  
+- Runs locally on **port 3001** (exposed via **ngrok** for webhook callbacks)
 
 ### 🤖 GitHub Actions Pipeline
 - Multi-tool security scanning:
-  - **Trivy**
-  - **Snyk**
-- Automated detection across:
-  - Dependencies
-  - Source code
-  - Config files
-  - Secrets
+  - **Trivy** → OS, dependencies, configs, secrets  
+  - **Snyk** → application dependencies  
+- Automated detection across repositories
 - Intelligent caching for faster runs
 - Results delivered back to backend via webhook callbacks
 
@@ -47,10 +44,10 @@ The system scans GitHub repositories in real-time, aggregates vulnerabilities fr
 
 1. User enters a GitHub repository URL in the **frontend**.  
 2. The **backend** triggers the GitHub Actions workflow.  
-3. GitHub Actions runs security scans (Trivy, Snyk).  
+3. GitHub Actions runs security scans (Trivy + Snyk).  
 4. Results are sent back to the backend via webhook.  
 5. Backend stores vulnerabilities in the SQLite database.  
-6. Frontend shows:
+6. Frontend displays:
    - Real-time progress updates  
    - Final vulnerability reports  
    - Filtering, grouping, and export options  
@@ -59,8 +56,8 @@ The system scans GitHub repositories in real-time, aggregates vulnerabilities fr
 
 ## 🛠️ Tech Stack
 
-- **Frontend:** React + Tailwind + WebSockets  
-- **Backend:** Node.js, Express, SQLite, ngrok (for local webhook exposure on port **3001**)  
+- **Frontend:** React, Tailwind, WebSockets  
+- **Backend:** Node.js, Express, SQLite, ngrok  
 - **CI/CD:** GitHub Actions  
 - **Security Tools:** Trivy, Snyk  
 
@@ -68,16 +65,49 @@ The system scans GitHub repositories in real-time, aggregates vulnerabilities fr
 
 ## 📦 Deployment
 
-
 ### 1️⃣ Backend
 ```bash
 git clone <this-repo>
 cd backend
 npm install
-ngrok 3001 http (Then Add the URL to the .env file)
 node server.js
+```
+The backend runs on **port 3001**.  
+If testing locally, expose it with **ngrok** before node server.js then put the URL gaven on the .env file :
+```bash
+ngrok http 3001
+```
 
-### Frontend
+### 2️⃣ Frontend
+```bash
 cd frontend
-npm install 
+npm install
 npm run dev
+```
+The dashboard runs on **http://localhost:3000** by default.
+
+### 3️⃣ GitHub Actions
+- Add these secrets in your repository:
+  - `SNYK_TOKEN` → for Snyk authentication  
+  - `GITHUB_TOKEN` → (default GitHub token, provided automatically)  
+- The pipeline will run automatically when triggered by the backend.
+
+---
+---
+
+## 📊 Roadmap
+- [ ] Add role-based access control (RBAC)  
+- [ ] Multi-repo batch scanning  
+- [ ] Dashboard analytics & charts  
+- [ ] More export formats (PDF, Excel)  
+
+---
+
+## 🤝 Contributing
+Contributions are welcome!  
+Please open an issue or submit a pull request if you’d like to improve the system.
+
+---
+
+## 📜 License
+MIT License — feel free to use, modify, and distribute this project.
