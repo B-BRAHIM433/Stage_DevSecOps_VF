@@ -22,8 +22,8 @@ on:
         required: false
       scan_depth:
         description: 'Niveau de scan (standard, deep)'
-        required: true
-        # default: 'standard'
+        required: false
+        default: 'standard'
         type: choice
         options:
           - standard
