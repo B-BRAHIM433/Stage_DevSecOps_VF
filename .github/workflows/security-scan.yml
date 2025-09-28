@@ -21,14 +21,13 @@ on:
         description: 'Horodatage du déclenchement'
         required: false
       scan_depth:
-        description: 'Niveau de scan (quick, standard, deep)'
+        description: 'Niveau de scan (standard, deep)'
         required: false
         default: 'standard'
         type: choice
         options:
           - standard
-          - comprehensive
-          - quick
+          - deep
 
 env:
   SCAN_ID: ${{ github.event.inputs.scan_id }}
@@ -270,7 +269,7 @@ jobs:
           
           # Clone with depth based on scan level
           CLONE_DEPTH=1
-          if [ "${{ env.SCAN_DEPTH }}" = "comprehensive" ]; then
+          if [ "${{ env.SCAN_DEPTH }}" = "deep" ]; then
             CLONE_DEPTH=50
           elif [ "${{ env.SCAN_DEPTH }}" = "standard" ]; then
             CLONE_DEPTH=10
@@ -299,7 +298,7 @@ jobs:
       # SNYK CONFIGURATION
       # ===============================
       - name: 🔐 Configure Snyk Authentication
-        if: steps.install-tools.outputs.snyk-ok == 'true' && (env.SCAN_DEPTH == 'comprehensive' || env.SCAN_DEPTH == 'standard')
+        if: steps.install-tools.outputs.snyk-ok == 'true' && (env.SCAN_DEPTH == 'deep' || env.SCAN_DEPTH == 'standard')
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         run: |
